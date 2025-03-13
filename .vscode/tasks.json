@@ -1,0 +1,39 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Run Dev Server",
+            "type": "npm",
+            "script": "dev",
+            "problemMatcher": [],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "Build Project",
+            "type": "npm",
+            "script": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "Preview Build",
+            "type": "npm",
+            "script": "preview",
+            "problemMatcher": []
+        },
+        {
+            "label": "Deploy to Firebase",
+            "type": "npm",
+            "script": "deploy:prod",
+            "problemMatcher": []
+        },
+        {
+            "label": "Clean Install",
+            "type": "npm",
+            "script": "clean",
+            "problemMatcher": []
+        }
+    ]
+} 

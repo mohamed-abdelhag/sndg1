@@ -1,0 +1,10 @@
+-- Run in SQL Editor
+CREATE POLICY "Enable full access for site masters" 
+ON admin_requests 
+FOR ALL USING (
+  EXISTS (
+    SELECT 1 
+    FROM users 
+    WHERE id = auth.uid() AND is_site_master = true
+  )
+); 
