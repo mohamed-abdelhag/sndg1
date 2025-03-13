@@ -60,7 +60,21 @@
         isAuthorized = true;
       }
       
-      // Get pending admin requests count
+      // Try to get data with error handling for each request
+      await loadDashboardData();
+    } catch (error) {
+      console.error('[SiteMaster] Unexpected error:', error);
+      errorMessage = 'An unexpected error occurred. Please try again.';
+      showError = true;
+    } finally {
+      loading = false;
+    }
+  });
+  
+  // Function to load all dashboard data with proper error handling
+  async function loadDashboardData() {
+    // Get pending admin requests count - handle permission errors gracefully
+    try {
       const { count: requestCount, error: requestError } = await supabase
         .from('admin_requests')
         .select('id', { count: 'exact', head: true })
@@ -70,9 +84,15 @@
         pendingAdminRequests = requestCount || 0;
       } else {
         console.error('[SiteMaster] Error fetching admin requests:', requestError);
+        pendingAdminRequests = 0; // Default to 0 on error
       }
-      
-      // Get total users count
+    } catch (error) {
+      console.error('[SiteMaster] Admin requests count error:', error);
+      pendingAdminRequests = 0;
+    }
+    
+    // Get total users count - handle errors gracefully
+    try {
       const { count: userCount, error: userError } = await supabase
         .from('users')
         .select('id', { count: 'exact', head: true });
@@ -81,9 +101,15 @@
         totalUsers = userCount || 0;
       } else {
         console.error('[SiteMaster] Error fetching users count:', userError);
+        totalUsers = 0;
       }
-      
-      // Get total groups count
+    } catch (error) {
+      console.error('[SiteMaster] User count error:', error);
+      totalUsers = 0;
+    }
+    
+    // Get total groups count - handle errors gracefully
+    try {
       const { count: groupCount, error: groupError } = await supabase
         .from('groups')
         .select('id', { count: 'exact', head: true });
@@ -92,16 +118,13 @@
         totalGroups = groupCount || 0;
       } else {
         console.error('[SiteMaster] Error fetching groups count:', groupError);
+        totalGroups = 0;
       }
     } catch (error) {
-      console.error('[SiteMaster] Unexpected error:', error);
-      errorMessage = 'An unexpected error occurred. Please try again.';
-      showError = true;
-      goto('/');
-    } finally {
-      loading = false;
+      console.error('[SiteMaster] Group count error:', error);
+      totalGroups = 0;
     }
-  });
+  }
 </script>
 
 <svelte:head>
