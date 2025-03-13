@@ -1,39 +1,31 @@
-import prettier from 'eslint-config-prettier';
-import js from '@eslint/js';
-import { includeIgnoreFile } from '@eslint/compat';
-import svelte from 'eslint-plugin-svelte';
-import globals from 'globals';
-import { fileURLToPath } from 'node:url';
-import ts from 'typescript-eslint';
-import svelteConfig from './svelte.config.js';
-const gitignorePath = fileURLToPath(new URL('./.gitignore', import.meta.url));
+// @ts-check
+/** @type {import('eslint').Linter.FlatConfig[]} */
 
-export default ts.config(
-	includeIgnoreFile(gitignorePath),
-	js.configs.recommended,
-	...ts.configs.recommended,
-	...svelte.configs.recommended,
-	prettier,
-	...svelte.configs.prettier,
+import eslintPluginSvelte from 'eslint-plugin-svelte';
+import tseslint from '@typescript-eslint/eslint-plugin';
+import tseslintParser from '@typescript-eslint/parser';
+
+export default [
 	{
+		ignores: ['**/node_modules/**', '.svelte-kit/**', 'build/**']
+	},
+	{
+		files: ['**/*.{js,ts,svelte}'],
+		plugins: {
+			'@typescript-eslint': tseslint,
+			svelte: eslintPluginSvelte
+		},
 		languageOptions: {
-			globals: {
-				...globals.browser,
-				...globals.node
+			parser: tseslintParser,
+			parserOptions: {
+				ecmaVersion: 2022,
+				sourceType: 'module',
+				extraFileExtensions: ['.svelte']
 			}
 		}
 	},
 	{
-		files: ['**/*.svelte', '**/*.svelte.ts', '**/*.svelte.js'],
-		ignores: ['eslint.config.js', 'svelte.config.js'],
-
-		languageOptions: {
-			parserOptions: {
-				projectService: true,
-				extraFileExtensions: ['.svelte'],
-				parser: ts.parser,
-				svelteConfig
-			}
-		}
+		files: ['**/*.svelte'],
+		processor: 'svelte/svelte'
 	}
-);
+];
