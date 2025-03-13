@@ -1,4 +1,308 @@
-# Supabase Configuration and Changes
+# Supabase Configuration
+
+## Current Database Structure
+
+### Tables
+
+| Table Name | Description | Notes |
+|------------|-------------|-------|
+| admin_requests | Tracks admin role requests | Used for site master approval workflow |
+| group_join_requests | Tracks group join requests | Used for admin approval of members |
+| groups | Stores group information | Main groups table |
+| users | Extended user profile data | Contains admin and site master flags |
+
+### Functions
+
+| Function Name | Parameters | Return Type | Description |
+|---------------|------------|-------------|-------------|
+| add_member_column | group_id uuid, user_id uuid | void | Adds a column for a new member in contribution matrix |
+| add_new_month_to_matrix | group_id uuid | void | Adds a new month row to a group's contribution matrix |
+| approve_admin_request | request_id uuid, site_master_id uuid | void | Site master approves admin request |
+| approve_join_request | request_id uuid, admin_id uuid | void | Admin approves join request |
+| approve_withdrawal | group_id uuid, withdrawal_id uuid, admin_id uuid | void | Admin approves withdrawal request |
+| check_admin_request_eligibility | user_id uuid | boolean | Checks if user is eligible to request admin status |
+| create_group_and_update_creator | name text, description text, type text, monthly_contribution_amount numeric, start_month_year date, creator_id uuid | uuid | Creates group and updates creator's status |
+| create_group_contribution_matrix | group_id uuid | void | Creates contribution matrix table for group |
+| create_group_tables | group_id uuid | void | Creates all required tables for a new group |
+| create_group_withdrawal_table | group_id uuid | void | Creates withdrawal table for group |
+| get_admin_request_ineligibility_reason | user_id uuid | text | Gets reason why user can't request admin status |
+| initialize_monthly_row | group_id uuid, month_number integer | void | Initializes a new month row in matrix |
+| record_contribution | parameters vary | void | Records contribution in matrix |
+| record_payback | group_id uuid, user_id uuid, withdrawal_id uuid, month_number integer, payback_amount numeric | void | Records payback amount |
+| reject_admin_request | request_id uuid, site_master_id uuid | void | Site master rejects admin request |
+| reject_join_request | request_id uuid, admin_id uuid | void | Admin rejects join request |
+| request_withdrawal | group_id uuid, user_id uuid, month_number integer, amount numeric, reason text, payback_months integer | uuid | Creates withdrawal request |
+| select_lottery_winner | group_id uuid, month_number integer | uuid | Selects winner for lottery groups |
+| update_modified_column | - | trigger | Updates timestamp on record modification |
+
+### Triggers
+
+| Trigger Name | Table | Function | Event | Level |
+|--------------|-------|----------|-------|-------|
+| after_group_created | groups | create_group_tables_trigger | AFTER INSERT | ROW |
+| update_groups_timestamp | groups | update_modified_column | BEFORE UPDATE | ROW |
+| update_users_timestamp | users | update_modified_column | BEFORE UPDATE | ROW |
+
+### Row Level Security (RLS) Policies
+
+#### admin_requests Table
+
+| Policy | Description | Applied to Role |
+|--------|-------------|-----------------|
+| UPDATE | Site masters can update admin requests | `public` |
+| SELECT | Site masters can view all admin requests | `public` |
+| INSERT | Users can create their own admin requests | `public` |
+| INSERT | Users can only create admin requests if eligible | `public` |
+| SELECT | Users can see their own admin requests | `public` |
+
+#### group_join_requests Table
+
+| Policy | Description | Applied to Role |
+|--------|-------------|-----------------|
+| UPDATE | Group admins can update join requests for their group | `public` |
+| SELECT | Group admins can view join requests for their group | `public` |
+| INSERT | Users can create their own join requests | `public` |
+| SELECT | Users can see their own join requests | `public` |
+
+#### groups Table
+
+| Policy | Description | Applied to Role |
+|--------|-------------|-----------------|
+| ALL | Group creators can do everything | `public` |
+| SELECT | Group members can view | `public` |
+
+#### users Table
+
+Currently has RLS enabled but no policies defined.
+
+## Missing Elements and Needed Updates
+
+### 1. Missing Tables
+
+The following dynamic tables need to be created per group:
+
+```sql
+-- Note: These are created dynamically by the create_group_tables function
+-- {group_id}_matrix - For tracking contributions
+-- {group_id}_withdrawals - For tracking withdrawals
+```
+
+### 2. Missing RLS Policies
+
+RLS policies needed for the `users` table:
+
+```sql
+-- Allow users to view their own profile
+CREATE POLICY "Users can view own profile"
+ON users
+FOR SELECT
+USING (auth.uid() = id);
+
+-- Allow users to update their own profile
+CREATE POLICY "Users can update own profile"
+ON users
+FOR UPDATE
+USING (auth.uid() = id);
+
+-- Allow site masters to view all users
+CREATE POLICY "Site masters can view all users"
+ON users
+FOR SELECT
+USING (
+  EXISTS (
+    SELECT 1 FROM users
+    WHERE id = auth.uid() AND is_site_master = true
+  )
+);
+
+-- Allow site masters to update user admin status
+CREATE POLICY "Site masters can update admin status"
+ON users
+FOR UPDATE
+USING (
+  EXISTS (
+    SELECT 1 FROM users
+    WHERE id = auth.uid() AND is_site_master = true
+  )
+);
+```
+
+### 3. Database Schema Updates
+
+Ensure the tables have the correct structure:
+
+```sql
+-- Check/update admin_requests table structure
+ALTER TABLE admin_requests ADD COLUMN IF NOT EXISTS reason text;
+ALTER TABLE admin_requests ADD COLUMN IF NOT EXISTS status text DEFAULT 'pending'::text;
+ALTER TABLE admin_requests ADD COLUMN IF NOT EXISTS requested_at timestamp with time zone DEFAULT now();
+ALTER TABLE admin_requests ADD COLUMN IF NOT EXISTS responded_at timestamp with time zone;
+ALTER TABLE admin_requests ADD COLUMN IF NOT EXISTS responded_by uuid REFERENCES auth.users(id);
+
+-- Check/update users table structure
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin boolean DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_site_master boolean DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS group_id uuid REFERENCES groups(id);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS first_name text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_name text;
+```
+
+### 4. Missing Functions for Site Master and Admin Management
+
+```sql
+-- Function to check if a user is a site master
+CREATE OR REPLACE FUNCTION is_site_master(user_id uuid)
+RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER
+AS $$
+DECLARE
+  is_master boolean;
+BEGIN
+  SELECT is_site_master INTO is_master
+  FROM users
+  WHERE id = user_id;
+  
+  RETURN COALESCE(is_master, false);
+END;
+$$;
+
+-- Function to check if a user is an admin
+CREATE OR REPLACE FUNCTION is_admin(user_id uuid)
+RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER
+AS $$
+DECLARE
+  is_user_admin boolean;
+BEGIN
+  SELECT is_admin INTO is_user_admin
+  FROM users
+  WHERE id = user_id;
+  
+  RETURN COALESCE(is_user_admin, false);
+END;
+$$;
+
+-- Function to get all pending admin requests for site master
+CREATE OR REPLACE FUNCTION get_pending_admin_requests()
+RETURNS TABLE (
+  id uuid,
+  user_id uuid,
+  reason text,
+  status text,
+  requested_at timestamp with time zone,
+  user_email text,
+  user_first_name text,
+  user_last_name text
+)
+LANGUAGE plpgsql SECURITY DEFINER
+AS $$
+BEGIN
+  RETURN QUERY
+  SELECT 
+    ar.id,
+    ar.user_id,
+    ar.reason,
+    ar.status,
+    ar.requested_at,
+    u.email as user_email,
+    u.first_name as user_first_name,
+    u.last_name as user_last_name
+  FROM admin_requests ar
+  JOIN users u ON ar.user_id = u.id
+  WHERE ar.status = 'pending'
+  ORDER BY ar.requested_at DESC;
+END;
+$$;
+```
+
+### 5. Function Improvements
+
+```sql
+-- Update the approve_admin_request function to ensure it works properly
+CREATE OR REPLACE FUNCTION approve_admin_request(request_id uuid, site_master_id uuid)
+RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER
+AS $$
+BEGIN
+  -- Check if user is site master
+  IF NOT EXISTS (SELECT 1 FROM users WHERE id = site_master_id AND is_site_master = true) THEN
+    RAISE EXCEPTION 'User is not a site master';
+  END IF;
+  
+  -- Update the request status
+  UPDATE admin_requests
+  SET 
+    status = 'approved',
+    responded_at = now(),
+    responded_by = site_master_id
+  WHERE id = request_id AND status = 'pending';
+  
+  -- Make the user an admin
+  UPDATE users
+  SET 
+    is_admin = true
+  FROM admin_requests
+  WHERE users.id = admin_requests.user_id AND admin_requests.id = request_id;
+END;
+$$;
+
+-- Update the reject_admin_request function to ensure it works properly
+CREATE OR REPLACE FUNCTION reject_admin_request(request_id uuid, site_master_id uuid)
+RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER
+AS $$
+BEGIN
+  -- Check if user is site master
+  IF NOT EXISTS (SELECT 1 FROM users WHERE id = site_master_id AND is_site_master = true) THEN
+    RAISE EXCEPTION 'User is not a site master';
+  END IF;
+  
+  -- Update the request status
+  UPDATE admin_requests
+  SET 
+    status = 'rejected',
+    responded_at = now(),
+    responded_by = site_master_id
+  WHERE id = request_id AND status = 'pending';
+END;
+$$;
+```
+
+### 6. Add Initial Site Master User
+
+```sql
+-- This should be run once on database setup to create an initial site master
+-- Replace with actual email and password
+INSERT INTO auth.users (email, password) 
+VALUES ('sitemaster@sandoog.com', 'your-secure-password-hash') 
+RETURNING id;
+
+-- Get the created user ID and set it as site master
+UPDATE users
+SET is_site_master = true
+WHERE email = 'sitemaster@sandoog.com';
+```
+
+## Implementation Status
+
+- ✅ Basic table structure exists
+- ✅ Most functions for group management exist
+- ✅ RLS is enabled on all tables
+- ✅ Basic triggers for maintenance are in place
+- ❌ Users table needs RLS policies
+- ❌ Helper functions for site master checks need improvement
+- ❌ Initial site master creation script needed
+- ❌ Some function improvements needed
+
+## Next Steps
+
+1. Apply the missing RLS policies for users table
+2. Add the improved admin approval functions
+3. Create site master helper functions
+4. Ensure dynamic tables are created correctly for groups
+5. Test the site master approval workflow end-to-end
+6. Verify admin request eligibility checks work properly
+7. Test user flow from login to redirection based on status
 
 ## Project Status
 

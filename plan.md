@@ -78,30 +78,102 @@
 
 ## User Flow
 
-### Three Main User Flows
+### Three Main User Types and Flows
 
-1. **Admin User Flow**
-   - User requests admin status
-   - Site master approves admin request
-   - Admin creates a group
-   - Admin shares group ID with potential members
-   - Admin reviews and approves membership requests
-   - Admin manages group settings and approves withdrawals
+#### 1. Site Master
+**Site Master Flow:**
+1. Login → `/auth/login`
+2. Redirect to → `/sitemaster`
+3. View admin requests → `/sitemaster/admin-approvals`
+4. Approve/reject admin requests
+5. Manage site-wide settings
 
-2. **Group Member User Flow**
-   - User logs in
-   - User requests to join a group using group ID
-   - Once approved, user accesses group dashboard
-   - User makes contributions and withdrawal requests
-   - User tracks their payback obligations
+**Screens in Path:**
+- Login Screen
+- Site Master Dashboard (shows pending admin requests, user counts, group counts)
+- Admin Approval Screen (lists all admin requests with ability to filter by status)
 
-3. **New User Flow**
-   - User signs up and logs in
-   - User has two options:
-     - Request to join an existing group (with group ID)
-     - Request admin status to create a new group
+#### 2. Admin User
+**Admin User Flow (New Admin):**
+1. Login → `/auth/login`
+2. If not admin yet: Request admin → `/auth/admin-request`
+3. Wait for approval from site master
+4. Once approved: Create group → `/groups/new`
+5. Share group ID with potential members
+6. Manage group → `/groups/[groupId]`
+7. Approve membership requests → `/groups/[groupId]/members`
+8. Track contributions → `/groups/[groupId]/contributions`
+9. Approve withdrawals → `/groups/[groupId]/withdrawals`
 
-### Features Implementation
+**Admin User Flow (Existing Admin):**
+1. Login → `/auth/login`
+2. Redirect to → `/groups/[groupId]` (their group dashboard)
+3. Manage group, members, contributions, withdrawals
+
+**Screens in Path:**
+- Login Screen
+- Admin Request Screen (for new admins)
+- Group Creation Screen
+- Group Dashboard (shows overview, members, contribution matrix)
+- Member Management Screen (approve/reject join requests, manage members)
+- Contribution Matrix Screen (track all member contributions)
+- Withdrawal Management Screen (approve/reject withdrawal requests)
+
+#### 3. Regular User
+**New User Flow (No Group):**
+1. Signup → `/auth/signup`
+2. Login → `/auth/login`
+3. Choose between:
+   - Join existing group with ID → `/groups/join`
+   - Request admin status → `/auth/admin-request`
+4. If joining group:
+   - Submit join request with group ID
+   - Wait for admin approval
+   - Once approved: Access group → `/groups/[groupId]`
+
+**Existing User Flow (In Group):**
+1. Login → `/auth/login`
+2. Redirect to → `/groups/[groupId]` (their group dashboard)
+3. Make contributions → `/groups/[groupId]/contributions`
+4. Request withdrawals → `/groups/[groupId]/withdrawals`
+5. Track paybacks → `/groups/[groupId]/paybacks`
+
+**Screens in Path:**
+- Signup Screen
+- Login Screen
+- Group Join Screen (enter group ID)
+- Group Dashboard (view-only for non-admin members)
+- Contribution Screen (make monthly contributions)
+- Withdrawal Request Screen (request money from the pool)
+- Payback Tracking Screen (track outstanding obligations)
+
+### Login Redirect Logic
+Based on user type, the system will automatically redirect after login:
+
+```
+Login
+↓
+Check user status
+↓
+If site master → `/sitemaster`
+↓
+If admin with group → `/groups/[groupId]`
+↓
+If user with group → `/groups/[groupId]`
+↓
+If user without group → `/groups/join` with option to request admin
+```
+
+### User Status Matrix
+| User Type | Has Group | Admin Status | Site Master | Initial Redirect |
+|-----------|-----------|--------------|-------------|------------------|
+| Site Master | N/A | Yes | Yes | `/sitemaster` |
+| Admin | Yes | Yes | No | `/groups/[groupId]` |
+| Regular (in group) | Yes | No | No | `/groups/[groupId]` |
+| Regular (no group) | No | No | No | `/groups/join` |
+| Admin (pending) | No | No (requested) | No | `/auth/admin-request` |
+
+## Features Implementation
 
 #### User Authentication and Role Management
 - Uses Supabase Auth
@@ -324,85 +396,6 @@
 - Accessible color contrast
 - Clear visual hierarchy
 
-### Key Screens
-
-#### Login Redirect Logic
-- After login, route user based on status:
-  - If site master: route to site master dashboard
-  - If admin with group: route to admin dashboard
-  - If user with group: route to group dashboard
-  - If user without group: route to group join/admin request page
-
-#### Site Master Dashboard
-- List of pending admin requests
-- User management interface
-- System statistics and overview
-- Limited to authorized site master only
-
-#### Admin Request Screen
-- Form to request admin status
-- Request status tracking
-- Only available to users not already in a group
-
-#### Admin Dashboard
-- Group management interface
-- Member request approval section
-- Group ID sharing with copy functionality
-- Group settings management
-- Financial overview and statistics
-
-#### Group Join Screen
-- Input for group ID
-- Submit join request
-- Request status tracking
-- Only available to users not already in a group
-
-#### Group Dashboard
-- Group summary information
-- Contribution matrix view (members vs months)
-- Pool total and monthly contribution amount
-- Withdrawal history
-- Member list with contribution status
-- Month numbering (1, 2, 3...) rather than calendar dates
-- Color coding for different cell states
-
-#### Contribution Screen
-- Current month highlighted
-- Simple form to submit contribution
-- Shows payback obligations
-- Combines contribution and payback in one submission
-- Shows history of previous months
-
-#### Withdrawal Screen
-- Withdrawal request form
-- Payback plan selection
-  - Monthly amount
-  - Duration
-  - Due date calculator
-- Terms acceptance
-- Status tracking
-
-#### Withdrawal Approval (Admin)
-- List of pending withdrawal requests
-- Request details with amounts
-- Payback plan review
-- Approve/reject buttons
-- History of past requests
-
-#### Payback Tracking
-- Outstanding payback amounts
-- Progress bars for each withdrawal
-- Monthly breakdown
-- Payment history
-- Due dates and remaining amounts
-
-#### Lottery Winner Screen
-- For lottery groups only
-- Winner announcement
-- Distribution amount
-- History of previous winners
-- Next drawing countdown
-
 ## Development Workflow
 
 1. Setup Development Environment
@@ -436,3 +429,12 @@
    - Production environment config
    - Monitoring and logging
    - Backup strategy 
+
+## Supabase Configuration
+Database tables and server-side functions are defined in a separate `supabase.md` file containing:
+- Table definitions
+- RPC functions
+- Triggers
+- Row-level security policies
+- Database indexes
+- Foreign key relationships 

@@ -8,10 +8,10 @@
   // =========================================
   // IMPORTANT: Landing Page Behavior Rules
   // =========================================
-  // 1. Always show landing page first
-  // 2. No automatic redirects
-  // 3. Let users manually navigate using buttons
-  // 4. Show appropriate options based on role
+  // 1. ALWAYS show landing page with Get Started/Sign In first
+  // 2. Add Continue button for authenticated users
+  // 3. Only show dashboard options after user clicks Continue
+  // 4. Never skip the landing page
   // =========================================
   
   // State variables for user status
@@ -22,7 +22,7 @@
   let hasGroup = false;
   let userId = '';
   let groupId = '';
-  let userChecked = false;
+  let showDashboard = false; // New state to control dashboard visibility
   
   onMount(async () => {
     try {
@@ -39,16 +39,11 @@
         isAdmin = status.isAdmin;
         hasGroup = !!status.groupId;
         groupId = status.groupId;
-        
-        // IMPORTANT: Do not add automatic redirects here
-        // Let users see their options and choose where to go
-        // This ensures the landing page is always shown first
       }
     } catch (error) {
       console.error('Error getting user status:', error);
     } finally {
       isLoading = false;
-      userChecked = true;
     }
   });
 
@@ -64,15 +59,18 @@
   function goToGroup() {
     goto(`/groups/${groupId}`);
   }
+
+  function showUserDashboard() {
+    showDashboard = true;
+  }
 </script>
 
 <svelte:head>
   <title>Sandoog - Savings Group Management</title>
 </svelte:head>
 
-<!-- Three main states: Loading, Not Authenticated, Authenticated -->
+<!-- Always show loading state when checking auth -->
 {#if isLoading}
-  <!-- Loading state - shown while checking auth -->
   <div class="min-h-screen flex items-center justify-center">
     <div class="text-center">
       <svg class="animate-spin h-10 w-10 text-indigo-600 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -82,8 +80,8 @@
       <p class="mt-3 text-gray-600">Loading...</p>
     </div>
   </div>
-{:else if !isAuthenticated}
-  <!-- Landing page for non-authenticated users -->
+{:else if !showDashboard}
+  <!-- ALWAYS show landing page first -->
   <div class="relative overflow-hidden">
     <div class="relative pt-6 pb-16 sm:pb-24">
       <div class="mt-16 mx-auto max-w-7xl px-4 sm:mt-24 sm:px-6">
@@ -103,23 +101,38 @@
             Sandoog makes it easy to organize and manage your savings groups, track contributions, and handle withdrawals.
           </p>
           <div class="mt-5 max-w-md mx-auto sm:flex sm:justify-center md:mt-8">
-            <div class="rounded-md shadow">
-              <a href="/auth/signup" class="w-full flex items-center justify-center px-8 py-3 border border-transparent text-base font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 md:py-4 md:text-lg md:px-10">
-                Get started
-              </a>
-            </div>
-            <div class="mt-3 rounded-md shadow sm:mt-0 sm:ml-3">
-              <a href="/auth/login" class="w-full flex items-center justify-center px-8 py-3 border border-transparent text-base font-medium rounded-md text-indigo-600 bg-white hover:bg-gray-50 md:py-4 md:text-lg md:px-10">
-                Sign in
-              </a>
-            </div>
+            {#if !isAuthenticated}
+              <!-- Show Get Started and Sign In for non-authenticated users -->
+              <div class="rounded-md shadow">
+                <a href="/auth/signup" class="w-full flex items-center justify-center px-8 py-3 border border-transparent text-base font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 md:py-4 md:text-lg md:px-10">
+                  Get started
+                </a>
+              </div>
+              <div class="mt-3 rounded-md shadow sm:mt-0 sm:ml-3">
+                <a href="/auth/login" class="w-full flex items-center justify-center px-8 py-3 border border-transparent text-base font-medium rounded-md text-indigo-600 bg-white hover:bg-gray-50 md:py-4 md:text-lg md:px-10">
+                  Sign in
+                </a>
+              </div>
+            {:else}
+              <!-- Show Continue button for authenticated users -->
+              <div class="rounded-md shadow">
+                <Button 
+                  on:click={showUserDashboard}
+                  variant="primary"
+                  size="lg"
+                  fullWidth={true}
+                >
+                  Continue to Dashboard
+                </Button>
+              </div>
+            {/if}
           </div>
         </div>
       </div>
     </div>
   </div>
 {:else}
-  <!-- Options for authenticated users - Shows navigation based on role -->
+  <!-- Dashboard options only shown after clicking Continue -->
   <div class="py-12">
     <div class="max-w-4xl mx-auto">
       <div class="text-center">

@@ -5,6 +5,7 @@
   import { goto } from '$app/navigation';
   import Button from '$lib/components/common/Button.svelte';
   import Notification from '$lib/components/common/Notification.svelte';
+  import AdminApproval from '$lib/components/sitemaster/AdminApproval.svelte';
   
   // Define types
   interface AdminRequest {
@@ -34,6 +35,8 @@
       // Check if user is site master
       const isSiteMaster = await checkIfSiteMaster();
       if (!isSiteMaster) {
+        errorMessage = 'You are not authorized to access this page.';
+        showError = true;
         goto('/');
         return;
       }
@@ -100,7 +103,7 @@
       
       if (error) {
         console.error('Error approving request:', error);
-        errorMessage = 'Failed to approve request. Please try again.';
+        errorMessage = `Failed to approve request: ${error.message}`;
         showError = true;
         return;
       }
@@ -119,9 +122,9 @@
       
       successMessage = 'Admin request approved successfully!';
       showSuccess = true;
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error:', error);
-      errorMessage = 'Failed to approve request. Please try again.';
+      errorMessage = `Failed to approve request: ${error.message || 'Unknown error'}`;
       showError = true;
     } finally {
       processingId = null;
@@ -148,7 +151,7 @@
       
       if (error) {
         console.error('Error rejecting request:', error);
-        errorMessage = 'Failed to reject request. Please try again.';
+        errorMessage = `Failed to reject request: ${error.message}`;
         showError = true;
         return;
       }
@@ -167,18 +170,21 @@
       
       successMessage = 'Admin request rejected successfully!';
       showSuccess = true;
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error:', error);
-      errorMessage = 'Failed to reject request. Please try again.';
+      errorMessage = `Failed to reject request: ${error.message || 'Unknown error'}`;
       showError = true;
     } finally {
       processingId = null;
     }
   }
   
-  function formatDate(dateString: string): string {
-    return new Date(dateString).toLocaleString();
-  }
+  // Filter requests by status
+  let activeFilter: 'all' | 'pending' | 'approved' | 'rejected' = 'all';
+  
+  $: filteredRequests = activeFilter === 'all' 
+    ? adminRequests 
+    : adminRequests.filter(req => req.status === activeFilter);
 </script>
 
 <svelte:head>
@@ -204,80 +210,69 @@
     <div class="flex items-center justify-center h-64">
       <div class="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-indigo-500"></div>
     </div>
-  {:else if adminRequests.length === 0}
-    <div class="bg-white shadow overflow-hidden sm:rounded-md">
-      <div class="px-4 py-5 sm:p-6 text-center">
-        <p class="text-gray-500">No admin requests found.</p>
-      </div>
-    </div>
   {:else}
-    <div class="bg-white shadow overflow-hidden sm:rounded-md">
-      <ul class="divide-y divide-gray-200">
-        {#each adminRequests as request}
-          <li>
-            <div class="px-4 py-5 sm:px-6">
-              <div class="flex items-center justify-between">
-                <div>
-                  <h3 class="text-lg leading-6 font-medium text-gray-900">
-                    {request.users?.email || 'Unknown User'}
-                  </h3>
-                  <p class="max-w-2xl text-sm text-gray-500 mt-1">
-                    {request.users?.first_name} {request.users?.last_name}
-                  </p>
-                </div>
-                <div>
-                  <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full
-                    {request.status === 'pending' ? 'bg-yellow-100 text-yellow-800' : 
-                    request.status === 'approved' ? 'bg-green-100 text-green-800' : 
-                    'bg-red-100 text-red-800'}">
-                    {request.status.charAt(0).toUpperCase() + request.status.slice(1)}
-                  </span>
-                </div>
-              </div>
-              
-              <div class="mt-4 max-w-2xl text-sm text-gray-500">
-                <p class="font-medium">Request Reason:</p>
-                <p class="mt-1">{request.reason || 'No reason provided'}</p>
-              </div>
-              
-              <div class="mt-4 text-sm">
-                <div class="flex space-x-4">
-                  <p class="text-gray-500">
-                    Requested: {formatDate(request.requested_at)}
-                  </p>
-                  {#if request.responded_at}
-                    <p class="text-gray-500">
-                      Responded: {formatDate(request.responded_at)}
-                    </p>
-                  {/if}
-                </div>
-                
-                {#if request.status === 'pending'}
-                  <div class="mt-4 flex space-x-3">
-                    <Button 
-                      type="button" 
-                      variant="primary"
-                      loading={processingId === request.id}
-                      disabled={processingId !== null}
-                      on:click={() => approveRequest(request.id)}>
-                      Approve
-                    </Button>
-                    <Button 
-                      type="button" 
-                      variant="danger"
-                      loading={processingId === request.id}
-                      disabled={processingId !== null}
-                      on:click={() => rejectRequest(request.id)}>
-                      Reject
-                    </Button>
-                  </div>
-                {/if}
-              </div>
-            </div>
-          </li>
-        {/each}
-      </ul>
+    <!-- Filter tabs -->
+    <div class="mb-6 border-b border-gray-200">
+      <nav class="-mb-px flex space-x-8" aria-label="Tabs">
+        <button
+          class="whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm
+            {activeFilter === 'all' 
+              ? 'border-indigo-500 text-indigo-600' 
+              : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}"
+          on:click={() => activeFilter = 'all'}
+        >
+          All Requests
+        </button>
+        <button
+          class="whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm
+            {activeFilter === 'pending' 
+              ? 'border-yellow-500 text-yellow-600' 
+              : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}"
+          on:click={() => activeFilter = 'pending'}
+        >
+          Pending
+        </button>
+        <button
+          class="whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm
+            {activeFilter === 'approved' 
+              ? 'border-green-500 text-green-600' 
+              : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}"
+          on:click={() => activeFilter = 'approved'}
+        >
+          Approved
+        </button>
+        <button
+          class="whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm
+            {activeFilter === 'rejected' 
+              ? 'border-red-500 text-red-600' 
+              : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}"
+          on:click={() => activeFilter = 'rejected'}
+        >
+          Rejected
+        </button>
+      </nav>
     </div>
+    
+    {#if filteredRequests.length === 0}
+      <div class="bg-white shadow overflow-hidden sm:rounded-md">
+        <div class="px-4 py-5 sm:p-6 text-center">
+          <p class="text-gray-500">No admin requests found with the selected filter.</p>
+        </div>
+      </div>
+    {:else}
+      <div class="bg-white shadow overflow-hidden sm:rounded-md">
+        <ul class="divide-y divide-gray-200">
+          {#each filteredRequests as request}
+            <AdminApproval 
+              {request} 
+              loading={processingId === request.id}
+              on:approve={({ detail }) => approveRequest(detail.id)}
+              on:reject={({ detail }) => rejectRequest(detail.id)}
+            />
+          {/each}
+        </ul>
+      </div>
+    {/if}
   {/if}
 </div>
 
