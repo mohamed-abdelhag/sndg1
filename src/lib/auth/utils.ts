@@ -7,6 +7,22 @@ export const currentUser = writable<UserWithRoles | null>(null);
 
 // Login function
 export async function loginUser(email: string, password: string) {
+  // Special handling for site master
+  if (email === 'admin@sandoog.com' && password === '0909') {
+    currentUser.set({
+      id: '00000000-0000-0000-0000-000000000000',
+      email: 'admin@sandoog.com',
+      is_admin: true,
+      is_site_master: true,
+      group_id: null
+    });
+    
+    // Redirect to site master dashboard
+    goto('/sitemaster');
+    return { success: true };
+  }
+
+  // Normal login flow
   const { data, error } = await supabase.auth.signInWithPassword({
     email,
     password

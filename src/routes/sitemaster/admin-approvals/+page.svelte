@@ -14,11 +14,11 @@
     status: 'pending' | 'approved' | 'rejected';
     requested_at: string;
     responded_at: string | null;
-    users?: {
+    users: {
       email: string;
       first_name?: string;
       last_name?: string;
-    } | null;
+    };
   }
   
   let loading = true;
@@ -73,7 +73,11 @@
       return;
     }
     
-    adminRequests = (data || []) as AdminRequest[];
+    // Transform the data to match AdminRequest type
+    adminRequests = (data || []).map(item => ({
+      ...item,
+      users: Array.isArray(item.users) ? item.users[0] : item.users
+    })) as AdminRequest[];
   }
   
   async function approveRequest(requestId: string) {

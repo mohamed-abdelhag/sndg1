@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { requestAdminStatus, canRequestAdminStatus, getAdminRequestStatus } from '$lib/auth/utils';
   import { supabase } from '$lib/auth/supabase';
   import Button from '$lib/components/common/Button.svelte';
   import Notification from '$lib/components/common/Notification.svelte';
@@ -26,27 +25,51 @@
     if (session) {
       userId = session.user.id;
       
-      // Check if user can request admin status
-      const { eligible, error } = await canRequestAdminStatus(userId);
-      canRequest = eligible;
-      
-      // Check for existing request
-      const requestStatus = await getAdminRequestStatus(userId);
-      if (requestStatus) {
-        existingRequestStatus = requestStatus.status;
-        requestDate = new Date(requestStatus.requested_at).toLocaleDateString();
+      try {
+        // Check for existing request first
+        const { data: requestData } = await supabase
+          .from('admin_requests')
+          .select('status, requested_at')
+          .eq('user_id', userId)
+          .order('requested_at', { ascending: false })
+          .limit(1)
+          .single();
+        
+        if (requestData) {
+          existingRequestStatus = requestData.status;
+          requestDate = new Date(requestData.requested_at).toLocaleDateString();
+          canRequest = false;
+          return;
+        }
+        
+        // Only check eligibility if there's no existing request
+        const { data: isEligible } = await supabase
+          .rpc('check_admin_request_eligibility', { user_id: userId });
+        
+        canRequest = !!isEligible;
+        
+        if (!canRequest) {
+          // Check if user is already an admin or has a group
+          const { data: userData } = await supabase
+            .from('users')
+            .select('is_admin, is_site_master, group_id')
+            .eq('id', userId)
+            .single();
+          
+          if (userData?.is_admin || userData?.is_site_master) {
+            errorMessage = 'You are already an admin';
+          } else if (userData?.group_id) {
+            errorMessage = 'You already belong to a group';
+          }
+          showError = true;
+        }
+      } catch (error) {
+        console.error('Error checking admin request status:', error);
+        errorMessage = 'Failed to check eligibility';
+        showError = true;
       }
     }
   });
-  
-  async function checkRequestStatus() {
-    const request = await getAdminRequestStatus(userId);
-    if (request) {
-      existingRequestStatus = request.status;
-      requestDate = new Date(request.requested_at).toLocaleDateString();
-      canRequest = false;
-    }
-  }
   
   async function handleSubmit() {
     if (!reason) {
@@ -69,11 +92,14 @@
       
       if (error) throw error;
       
-      await checkRequestStatus();
-      successMessage = 'Request submitted!';
+      existingRequestStatus = 'pending';
+      requestDate = new Date().toLocaleDateString();
+      canRequest = false;
+      successMessage = 'Your admin request has been submitted successfully!';
       showSuccess = true;
     } catch (error) {
-      errorMessage = 'Failed to submit request';
+      console.error('Error submitting admin request:', error);
+      errorMessage = 'Failed to submit request. Please try again.';
       showError = true;
     } finally {
       loading = false;
