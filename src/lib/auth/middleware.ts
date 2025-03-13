@@ -125,6 +125,24 @@ export async function checkIfSiteMaster(): Promise<boolean> {
       return false;
     }
     
+    // First check: Email domain check for @sandoog.com
+    if (session.user.email && session.user.email.toLowerCase().endsWith('@sandoog.com')) {
+      console.log('[Auth] Site master detected via email domain:', session.user.email);
+      
+      // Ensure the database is updated to reflect site master status
+      await supabase
+        .from('users')
+        .upsert({
+          id: session.user.id,
+          email: session.user.email,
+          is_admin: true,
+          is_site_master: true
+        });
+        
+      return true;
+    }
+    
+    // Second check: Database flag check
     const { data, error } = await supabase
       .from('users')
       .select('is_site_master')
@@ -132,11 +150,14 @@ export async function checkIfSiteMaster(): Promise<boolean> {
       .single();
     
     if (error || !data) {
+      console.log('[Auth] Site master check failed, no user data found');
       return false;
     }
     
+    console.log('[Auth] Site master check from database:', data.is_site_master);
     return data.is_site_master || false;
   } catch (error) {
+    console.error('[Auth] Error checking site master status:', error);
     return false;
   }
 } 
