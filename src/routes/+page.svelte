@@ -8,10 +8,10 @@
   // =========================================
   // IMPORTANT: Landing Page Behavior Rules
   // =========================================
-  // 1. ALWAYS show landing page with Get Started/Sign In first
-  // 2. Add Continue button for authenticated users
-  // 3. Only show dashboard options after user clicks Continue
-  // 4. Never skip the landing page
+  // 1. Show landing page with Get Started/Sign In for non-authenticated users
+  // 2. Automatically redirect authenticated users based on their role
+  // 3. Only show dashboard options for users without specific roles
+  // 4. Do NOT show Continue button - immediate redirect instead
   // =========================================
   
   // State variables for user status
@@ -22,7 +22,7 @@
   let hasGroup = false;
   let userId = '';
   let groupId = '';
-  let showDashboard = false; // New state to control dashboard visibility
+  let showDashboard = false;
   
   onMount(async () => {
     try {
@@ -39,28 +39,33 @@
         isAdmin = status.isAdmin;
         hasGroup = !!status.groupId;
         groupId = status.groupId;
-
-        // Auto-redirect based on roles instead of showing "Continue" button
+        
+        console.log('[Home] User status:', { isSiteMaster, isAdmin, hasGroup });
+        
+        // Auto-redirect based on roles - immediately route to appropriate dashboard
         if (isSiteMaster) {
-          goToSiteMaster();
+          console.log('[Home] Redirecting to site master dashboard');
+          goto('/sitemaster');
           return;
         }
         
         if (isAdmin && hasGroup) {
-          goToAdmin();
+          console.log('[Home] Redirecting to admin dashboard');
+          goto('/admin');
           return;
         }
         
         if (hasGroup) {
-          goToGroup();
+          console.log('[Home] Redirecting to group dashboard');
+          goto(`/groups/${groupId}`);
           return;
         }
         
-        // Only users with no specific role will see the landing page options
+        // Only users with no specific role will see the options dashboard
         showDashboard = true;
       }
     } catch (error) {
-      console.error('Error getting user status:', error);
+      console.error('[Home] Error getting user status:', error);
     } finally {
       isLoading = false;
     }
@@ -77,10 +82,6 @@
 
   function goToGroup() {
     goto(`/groups/${groupId}`);
-  }
-
-  function showUserDashboard() {
-    showDashboard = true;
   }
 </script>
 

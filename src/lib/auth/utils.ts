@@ -179,17 +179,39 @@ export function redirectBasedOnRole(user: UserWithRoles | null) {
 // Check if user can request admin status
 export async function canRequestAdminStatus(userId: string) {
   try {
-    // First check if user already has pending or approved requests
+    console.log('[AdminRequest] Checking eligibility for user ID:', userId);
+    
+    // First check if user already has any admin requests (regardless of status)
+    // Use a more direct approach instead of complex filters
     const { data: existingRequests, error: requestError } = await supabase
       .from('admin_requests')
-      .select('status')
+      .select('status, requested_at')
       .eq('user_id', userId)
-      .in('status', ['pending', 'approved'])
-      .limit(1);
+      .order('requested_at', { ascending: false });
       
-    if (!requestError && existingRequests && existingRequests.length > 0) {
-      console.log('[Auth] User already has admin request with status:', existingRequests[0].status);
-      return { eligible: false, error: `You already have an ${existingRequests[0].status} admin request` };
+    console.log('[AdminRequest] Request check result:', { data: existingRequests, error: requestError });
+    
+    if (requestError) {
+      // If there's a database error (e.g., table doesn't exist), log it but allow the request
+      console.error('[AdminRequest] Error checking for existing requests:', requestError);
+      // Continue with other checks
+    } else if (existingRequests && existingRequests.length > 0) {
+      // If any requests exist, check the status of the most recent one
+      const latestRequest = existingRequests[0];
+      console.log('[AdminRequest] Found existing request with status:', latestRequest.status);
+      
+      if (latestRequest.status === 'pending' || latestRequest.status === 'approved') {
+        return { 
+          eligible: false, 
+          error: `You already have an ${latestRequest.status} admin request (from ${new Date(latestRequest.requested_at).toLocaleDateString()})` 
+        };
+      }
+      
+      // If the latest request was rejected, they can apply again
+      if (latestRequest.status === 'rejected') {
+        console.log('[AdminRequest] User has a rejected request, can apply again');
+        // Continue with other checks
+      }
     }
       
     // Then check user attributes
@@ -199,7 +221,14 @@ export async function canRequestAdminStatus(userId: string) {
       .eq('id', userId)
       .single();
       
-    if (!userError && userData) {
+    console.log('[AdminRequest] User data check result:', { data: userData, error: userError });
+    
+    if (userError) {
+      console.error('[AdminRequest] Error checking user data:', userError);
+      return { eligible: false, error: 'Unable to verify user status. Please try again later.' };
+    }
+    
+    if (userData) {
       if (userData.is_admin) {
         return { eligible: false, error: 'You are already an admin' };
       }
@@ -220,14 +249,17 @@ export async function canRequestAdminStatus(userId: string) {
       .eq('user_id', userId)
       .eq('status', 'pending');
       
+    console.log('[AdminRequest] Join request check result:', { count: joinRequestCount, error: joinError });
+    
     if (!joinError && joinRequestCount && joinRequestCount > 0) {
       return { eligible: false, error: 'You have pending group join requests' };
     }
     
     // If all checks pass, user is eligible
+    console.log('[AdminRequest] User is eligible for admin request');
     return { eligible: true, error: null };
   } catch (error) {
-    console.error('Admin eligibility check failed:', error);
+    console.error('[AdminRequest] Admin eligibility check failed:', error);
     return { eligible: false, error: 'Unable to check eligibility' };
   }
 }

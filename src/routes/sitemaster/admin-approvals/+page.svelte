@@ -30,6 +30,8 @@
   let showSuccess = false;
   let processingId: string | null = null;
   let isAuthorized = false;
+  let tableNotFound = false;
+  let filteredRequests: AdminRequest[] = [];
   
   onMount(async () => {
     try {
@@ -91,6 +93,21 @@
     console.log('[AdminApprovals] Loading admin requests...');
     
     try {
+      // First check if table exists
+      const { error: tableCheckError } = await supabase
+        .from('admin_requests')
+        .select('id')
+        .limit(1);
+        
+      if (tableCheckError && tableCheckError.message?.includes('relation "admin_requests" does not exist')) {
+        console.error('[AdminApprovals] Table does not exist:', tableCheckError.message);
+        errorMessage = 'The admin_requests table has not been created yet. Please run the SQL script in sql/fix_admin_requests.sql to set up the table.';
+        adminRequests = [];
+        showError = true;
+        tableNotFound = true;
+        return;
+      }
+    
       // First get all admin requests directly without joins
       const { data, error } = await supabase
         .from('admin_requests')
@@ -109,9 +126,12 @@
         
         // Special handling for common errors
         if (error.message?.includes('relation "admin_requests" does not exist')) {
-          errorMessage = 'The admin_requests table has not been created yet. Please run the SQL script to set up the table.';
+          errorMessage = 'The admin_requests table has not been created yet. Please run the SQL script in sql/fix_admin_requests.sql to set up the table.';
           adminRequests = [];
           showError = true;
+          tableNotFound = true;
+          
+          // Show error UI will be handled in the template below
           return;
         }
         
@@ -167,72 +187,53 @@
     }
   }
   
-  // NOTE: The approveRequest and rejectRequest functions were removed by mistake
-  // Let's add them back properly
-  
+  // Add the approve and reject functions back
   async function approveRequest(requestId: string) {
-    console.log('[AdminApprovals] Approving request:', requestId);
     processingId = requestId;
+    
     try {
-      // Get current user
-      const { data: { session } } = await supabase.auth.getSession();
-      
-      if (!session) {
-        errorMessage = 'You must be logged in to approve requests.';
-        showError = true;
-        return;
-      }
-      
-      // Try direct update as a simpler approach
-      // Get the user_id from the request
-      const request = adminRequests.find(r => r.id === requestId);
-      if (!request) {
-        errorMessage = 'Request not found';
-        showError = true;
-        return;
-      }
-      
-      // Update the request status
+      // Update the admin request
       const { error: updateError } = await supabase
         .from('admin_requests')
         .update({
           status: 'approved',
           responded_at: new Date().toISOString(),
-          responded_by: session.user.id
+          responded_by: (await supabase.auth.getSession()).data.session?.user.id
         })
         .eq('id', requestId);
       
-      if (updateError) {
-        throw updateError;
-      }
+      if (updateError) throw updateError;
+      
+      // Get the request to find the user_id
+      const { data: requestData, error: requestError } = await supabase
+        .from('admin_requests')
+        .select('user_id')
+        .eq('id', requestId)
+        .single();
+      
+      if (requestError || !requestData) throw requestError || new Error('Failed to get request data');
       
       // Update the user to be an admin
-      const { error: userUpdateError } = await supabase
+      const { error: userError } = await supabase
         .from('users')
         .update({ is_admin: true })
-        .eq('id', request.user_id);
-        
-      if (userUpdateError) {
-        console.error('[AdminApprovals] Error updating user admin status:', userUpdateError);
-      }
+        .eq('id', requestData.user_id);
+      
+      if (userError) throw userError;
+      
+      // Success message and reload
+      successMessage = 'Request approved successfully';
+      showSuccess = true;
       
       // Update the local state
-      adminRequests = adminRequests.map(req => {
-        if (req.id === requestId) {
-          return {
-            ...req,
-            status: 'approved',
-            responded_at: new Date().toISOString()
-          };
-        }
-        return req;
-      });
-      
-      successMessage = 'Admin request approved successfully!';
-      showSuccess = true;
-    } catch (error: any) {
-      console.error('[AdminApprovals] Error:', error);
-      errorMessage = `Failed to approve request: ${error.message || 'Unknown error'}`;
+      adminRequests = adminRequests.map(req => 
+        req.id === requestId 
+          ? { ...req, status: 'approved', responded_at: new Date().toISOString() } 
+          : req
+      );
+    } catch (error) {
+      console.error('[AdminApprovals] Error approving request:', error);
+      errorMessage = 'Failed to approve request. Please try again.';
       showError = true;
     } finally {
       processingId = null;
@@ -240,49 +241,34 @@
   }
   
   async function rejectRequest(requestId: string) {
-    console.log('[AdminApprovals] Rejecting request:', requestId);
     processingId = requestId;
+    
     try {
-      // Get current user
-      const { data: { session } } = await supabase.auth.getSession();
-      
-      if (!session) {
-        errorMessage = 'You must be logged in to reject requests.';
-        showError = true;
-        return;
-      }
-      
-      // Direct update is more reliable
+      // Update the admin request
       const { error } = await supabase
         .from('admin_requests')
         .update({
           status: 'rejected',
           responded_at: new Date().toISOString(),
-          responded_by: session.user.id
+          responded_by: (await supabase.auth.getSession()).data.session?.user.id
         })
         .eq('id', requestId);
       
-      if (error) {
-        throw error;
-      }
+      if (error) throw error;
       
-      // Update the local state
-      adminRequests = adminRequests.map(request => {
-        if (request.id === requestId) {
-          return {
-            ...request,
-            status: 'rejected',
-            responded_at: new Date().toISOString()
-          };
-        }
-        return request;
-      });
-      
-      successMessage = 'Admin request rejected successfully!';
+      // Success message and reload
+      successMessage = 'Request rejected successfully';
       showSuccess = true;
-    } catch (error: any) {
-      console.error('[AdminApprovals] Error:', error);
-      errorMessage = `Failed to reject request: ${error.message || 'Unknown error'}`;
+      
+      // Update the local state to avoid a reload
+      adminRequests = adminRequests.map(req => 
+        req.id === requestId 
+          ? { ...req, status: 'rejected', responded_at: new Date().toISOString() } 
+          : req
+      );
+    } catch (error) {
+      console.error('[AdminApprovals] Error rejecting request:', error);
+      errorMessage = 'Failed to reject request. Please try again.';
       showError = true;
     } finally {
       processingId = null;
@@ -292,9 +278,11 @@
   // Filter requests by status
   let activeFilter: 'all' | 'pending' | 'approved' | 'rejected' = 'all';
   
-  $: filteredRequests = activeFilter === 'all' 
-    ? adminRequests 
-    : adminRequests.filter(req => req.status === activeFilter);
+  $: {
+    if (!adminRequests) filteredRequests = [];
+    else if (activeFilter === 'all') filteredRequests = adminRequests;
+    else filteredRequests = adminRequests.filter(req => req.status === activeFilter);
+  }
 </script>
 
 <svelte:head>
@@ -392,17 +380,41 @@
   </div>
 {:else}
   <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 text-center">
-    <div class="bg-red-50 shadow overflow-hidden sm:rounded-lg p-6">
-      <h2 class="text-2xl font-bold text-red-800">Access Denied</h2>
-      <p class="mt-4 text-red-600">
-        You are not authorized to access the admin approvals page.
-      </p>
-      <div class="mt-6">
-        <a href="/" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
-          Return to Home
-        </a>
+    {#if tableNotFound}
+      <div class="bg-red-50 border border-red-200 text-red-800 rounded-md p-4 mt-4">
+        <div class="flex">
+          <div class="flex-shrink-0">
+            <svg class="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+              <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
+            </svg>
+          </div>
+          <div class="ml-3 text-left">
+            <h3 class="text-sm font-medium text-red-800">Database Table Missing</h3>
+            <div class="mt-2 text-sm text-red-700">
+              <p>The admin_requests table does not exist in your database. Please follow these steps:</p>
+              <ol class="list-decimal pl-5 mt-1 space-y-1">
+                <li>Go to the SQL directory in your project</li>
+                <li>Find the file named fix_admin_requests.sql</li>
+                <li>Run this SQL script in the Supabase SQL Editor</li>
+                <li>Refresh this page after running the script</li>
+              </ol>
+            </div>
+          </div>
+        </div>
       </div>
-    </div>
+    {:else}
+      <div class="bg-red-50 shadow overflow-hidden sm:rounded-lg p-6">
+        <h2 class="text-2xl font-bold text-red-800">Access Denied</h2>
+        <p class="mt-4 text-red-600">
+          You are not authorized to access the admin approvals page.
+        </p>
+        <div class="mt-6">
+          <a href="/" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+            Return to Home
+          </a>
+        </div>
+      </div>
+    {/if}
   </div>
 {/if}
 

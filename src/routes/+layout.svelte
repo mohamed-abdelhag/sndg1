@@ -3,20 +3,34 @@
 	import { onMount } from 'svelte';
 	import { supabase } from '$lib/auth/supabase';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/stores';
 	
 	let isAuthenticated = false;
 	let isLoading = true;
+	let shouldShowHeader = true;
 	
 	onMount(async () => {
 		const { data: { session } } = await supabase.auth.getSession();
 		isAuthenticated = !!session;
 		isLoading = false;
 		
-		// Subscribe to auth state changes
+		updateHeaderVisibility();
+		
 		supabase.auth.onAuthStateChange((_event, session) => {
 			isAuthenticated = !!session;
 		});
 	});
+	
+	$: {
+		if ($page.url) {
+			updateHeaderVisibility();
+		}
+	}
+	
+	function updateHeaderVisibility() {
+		const path = $page.url.pathname;
+		shouldShowHeader = !(path === '/auth/login' || path === '/auth/signup');
+	}
 	
 	async function handleLogout() {
 		await supabase.auth.signOut();
@@ -43,6 +57,7 @@
 
 <div class="app min-h-screen bg-gray-50 text-gray-900">
 	{#if !isLoading}
+	{#if shouldShowHeader}
 	<header class="bg-white shadow-sm">
 		<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
 			<div class="flex justify-between h-16 items-center">
@@ -95,6 +110,7 @@
 			</div>
 		</div>
 	</header>
+	{/if}
 	<main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
 		<slot />
 	</main>
