@@ -179,12 +179,53 @@ export function redirectBasedOnRole(user: UserWithRoles | null) {
 // Check if user can request admin status
 export async function canRequestAdminStatus(userId: string) {
   try {
-    const { data, error } = await supabase
-      .rpc('check_admin_request_eligibility', { user_id: userId });
+    // First check if user already has pending or approved requests
+    const { data: existingRequests, error: requestError } = await supabase
+      .from('admin_requests')
+      .select('status')
+      .eq('user_id', userId)
+      .in('status', ['pending', 'approved'])
+      .limit(1);
       
-    if (error) throw error;
+    if (!requestError && existingRequests && existingRequests.length > 0) {
+      console.log('[Auth] User already has admin request with status:', existingRequests[0].status);
+      return { eligible: false, error: `You already have an ${existingRequests[0].status} admin request` };
+    }
+      
+    // Then check user attributes
+    const { data: userData, error: userError } = await supabase
+      .from('users')
+      .select('is_admin, is_site_master, group_id')
+      .eq('id', userId)
+      .single();
+      
+    if (!userError && userData) {
+      if (userData.is_admin) {
+        return { eligible: false, error: 'You are already an admin' };
+      }
+      
+      if (userData.is_site_master) {
+        return { eligible: false, error: 'Site masters already have admin privileges' };
+      }
+      
+      if (userData.group_id) {
+        return { eligible: false, error: 'You already belong to a group and cannot be an admin' };
+      }
+    }
     
-    return { eligible: data, error: null };
+    // Finally check for pending join requests
+    const { count: joinRequestCount, error: joinError } = await supabase
+      .from('group_join_requests')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', userId)
+      .eq('status', 'pending');
+      
+    if (!joinError && joinRequestCount && joinRequestCount > 0) {
+      return { eligible: false, error: 'You have pending group join requests' };
+    }
+    
+    // If all checks pass, user is eligible
+    return { eligible: true, error: null };
   } catch (error) {
     console.error('Admin eligibility check failed:', error);
     return { eligible: false, error: 'Unable to check eligibility' };

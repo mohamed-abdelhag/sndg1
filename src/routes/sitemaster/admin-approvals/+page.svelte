@@ -91,7 +91,7 @@
     console.log('[AdminApprovals] Loading admin requests...');
     
     try {
-      // First try to get all admin requests
+      // First get all admin requests directly without joins
       const { data, error } = await supabase
         .from('admin_requests')
         .select(`
@@ -106,21 +106,32 @@
         
       if (error) {
         console.error('[AdminApprovals] Error loading requests:', error);
+        
+        // Special handling for common errors
+        if (error.message?.includes('relation "admin_requests" does not exist')) {
+          errorMessage = 'The admin_requests table has not been created yet. Please run the SQL script to set up the table.';
+          adminRequests = [];
+          showError = true;
+          return;
+        }
+        
         errorMessage = 'Failed to load admin requests. Database error: ' + error.message;
         showError = true;
-        // If the error is because the table doesn't exist, set adminRequests to empty array
-        if (error.message?.includes('relation "admin_requests" does not exist') || 
-            error.message?.includes('Could not find a relationship')) {
-          console.log('[AdminApprovals] admin_requests table does not exist, showing mock interface');
-          adminRequests = [];
-        }
+        adminRequests = [];
         return;
       }
       
-      console.log('[AdminApprovals] Requests loaded:', data?.length || 0);
+      if (!data || data.length === 0) {
+        // No requests found, just return empty array
+        console.log('[AdminApprovals] No admin requests found');
+        adminRequests = [];
+        return;
+      }
       
-      // For each request, get the user data separately
-      const adminRequestsWithUsers = await Promise.all((data || []).map(async (request) => {
+      console.log('[AdminApprovals] Requests loaded:', data.length);
+      
+      // For each request, get the user data separately (more reliable than joins)
+      const adminRequestsWithUsers = await Promise.all(data.map(async (request) => {
         // Get user data for this request
         const { data: userData, error: userError } = await supabase
           .from('users')
@@ -172,53 +183,49 @@
         return;
       }
       
-      // Try direct update if RPC fails
-      try {
-        // First try using the RPC function
-        const { error: rpcError } = await supabase.rpc('approve_admin_request', {
-          request_id: requestId,
-          site_master_id: session.user.id
-        });
+      // Try direct update as a simpler approach
+      // Get the user_id from the request
+      const request = adminRequests.find(r => r.id === requestId);
+      if (!request) {
+        errorMessage = 'Request not found';
+        showError = true;
+        return;
+      }
+      
+      // Update the request status
+      const { error: updateError } = await supabase
+        .from('admin_requests')
+        .update({
+          status: 'approved',
+          responded_at: new Date().toISOString(),
+          responded_by: session.user.id
+        })
+        .eq('id', requestId);
+      
+      if (updateError) {
+        throw updateError;
+      }
+      
+      // Update the user to be an admin
+      const { error: userUpdateError } = await supabase
+        .from('users')
+        .update({ is_admin: true })
+        .eq('id', request.user_id);
         
-        if (rpcError) {
-          console.warn('[AdminApprovals] RPC failed, falling back to direct update:', rpcError);
-          throw rpcError;
-        }
-      } catch (rpcError) {
-        // Fallback: Update the request status directly
-        const { error: updateError } = await supabase
-          .from('admin_requests')
-          .update({
-            status: 'approved',
-            responded_at: new Date().toISOString(),
-            responded_by: session.user.id
-          })
-          .eq('id', requestId);
-        
-        if (updateError) {
-          throw updateError;
-        }
-        
-        // Also update the user to be an admin
-        const requestData = adminRequests.find(r => r.id === requestId);
-        if (requestData) {
-          await supabase
-            .from('users')
-            .update({ is_admin: true })
-            .eq('id', requestData.user_id);
-        }
+      if (userUpdateError) {
+        console.error('[AdminApprovals] Error updating user admin status:', userUpdateError);
       }
       
       // Update the local state
-      adminRequests = adminRequests.map(request => {
-        if (request.id === requestId) {
+      adminRequests = adminRequests.map(req => {
+        if (req.id === requestId) {
           return {
-            ...request,
+            ...req,
             status: 'approved',
             responded_at: new Date().toISOString()
           };
         }
-        return request;
+        return req;
       });
       
       successMessage = 'Admin request approved successfully!';
@@ -245,32 +252,18 @@
         return;
       }
       
-      // Try direct update if RPC fails
-      try {
-        // First try using the RPC function
-        const { error: rpcError } = await supabase.rpc('reject_admin_request', {
-          request_id: requestId,
-          site_master_id: session.user.id
-        });
-        
-        if (rpcError) {
-          console.warn('[AdminApprovals] RPC failed, falling back to direct update:', rpcError);
-          throw rpcError;
-        }
-      } catch (rpcError) {
-        // Fallback: Update the request status directly
-        const { error: updateError } = await supabase
-          .from('admin_requests')
-          .update({
-            status: 'rejected',
-            responded_at: new Date().toISOString(),
-            responded_by: session.user.id
-          })
-          .eq('id', requestId);
-        
-        if (updateError) {
-          throw updateError;
-        }
+      // Direct update is more reliable
+      const { error } = await supabase
+        .from('admin_requests')
+        .update({
+          status: 'rejected',
+          responded_at: new Date().toISOString(),
+          responded_by: session.user.id
+        })
+        .eq('id', requestId);
+      
+      if (error) {
+        throw error;
       }
       
       // Update the local state

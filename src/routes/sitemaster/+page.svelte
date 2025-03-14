@@ -75,6 +75,19 @@
   async function loadDashboardData() {
     // Get pending admin requests count - handle permission errors gracefully
     try {
+      // First check if table exists
+      const { error: tableCheckError } = await supabase
+        .from('admin_requests')
+        .select('id', { count: 'exact', head: true })
+        .limit(1);
+        
+      if (tableCheckError && tableCheckError.message?.includes('relation "admin_requests" does not exist')) {
+        console.warn('[SiteMaster] admin_requests table does not exist');
+        pendingAdminRequests = 0;
+        return;
+      }
+      
+      // If table exists, get the count of pending requests
       const { count: requestCount, error: requestError } = await supabase
         .from('admin_requests')
         .select('id', { count: 'exact', head: true })

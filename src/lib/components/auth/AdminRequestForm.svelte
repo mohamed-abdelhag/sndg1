@@ -1,5 +1,6 @@
 <script lang="ts">
   import { supabase } from '$lib/auth/supabase';
+  import { canRequestAdminStatus } from '$lib/auth/utils';
   import Button from '$lib/components/common/Button.svelte';
   import Notification from '$lib/components/common/Notification.svelte';
   import { onMount } from 'svelte';
@@ -30,68 +31,31 @@
       userEmail = session.user.email || '';
       
       try {
-        // Check for existing request first
-        const { data: requestData, error: requestError } = await supabase
-          .from('admin_requests')
-          .select('status, requested_at')
-          .eq('user_id', userId)
-          .order('requested_at', { ascending: false })
-          .limit(1)
-          .single();
+        // Use our improved eligibility check function to check for existing requests
+        const { eligible, error: eligibilityError } = await canRequestAdminStatus(userId);
         
-        if (!requestError && requestData) {
-          existingRequestStatus = requestData.status;
-          requestDate = new Date(requestData.requested_at).toLocaleDateString();
+        if (!eligible) {
           canRequest = false;
+          ineligibilityReason = eligibilityError || 'You are not eligible to request admin status';
+          
+          // Check if there's an existing request to show the status
+          const { data: requestData, error: requestError } = await supabase
+            .from('admin_requests')
+            .select('status, requested_at')
+            .eq('user_id', userId)
+            .order('requested_at', { ascending: false })
+            .limit(1);
+            
+          if (!requestError && requestData && requestData.length > 0) {
+            existingRequestStatus = requestData[0].status;
+            requestDate = new Date(requestData[0].requested_at).toLocaleDateString();
+          }
+          
           checkingEligibility = false;
           return;
         }
         
-        // First check user table for direct reasons
-        const { data: userData, error: userError } = await supabase
-          .from('users')
-          .select('is_admin, is_site_master, group_id')
-          .eq('id', userId)
-          .single();
-        
-        if (!userError && userData) {
-          if (userData.is_admin) {
-            canRequest = false;
-            ineligibilityReason = 'You are already an admin. You can create a group directly.';
-            checkingEligibility = false;
-            return;
-          }
-          
-          if (userData.is_site_master) {
-            canRequest = false;
-            ineligibilityReason = 'As a site master, you already have admin privileges.';
-            checkingEligibility = false;
-            return;
-          }
-          
-          if (userData.group_id) {
-            canRequest = false;
-            ineligibilityReason = 'You already belong to a group. You cannot be an admin and a group member at the same time.';
-            checkingEligibility = false;
-            return;
-          }
-        }
-        
-        // Check for pending join requests
-        const { count: joinRequestCount, error: joinError } = await supabase
-          .from('group_join_requests')
-          .select('id', { count: 'exact', head: true })
-          .eq('user_id', userId)
-          .eq('status', 'pending');
-          
-        if (!joinError && joinRequestCount && joinRequestCount > 0) {
-          canRequest = false;
-          ineligibilityReason = 'You have pending group join requests. Please cancel them before requesting admin status.';
-          checkingEligibility = false;
-          return;
-        }
-        
-        // If all checks passed, user is eligible
+        // If we get here, user is eligible
         canRequest = true;
         checkingEligibility = false;
         
