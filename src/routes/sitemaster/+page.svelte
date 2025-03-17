@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { supabase } from '$lib/auth/supabase';
-  import { checkIfSiteMaster } from '$lib/auth/middleware';
+  import { checkIfSiteMaster } from '$lib/auth/getUserStatus';
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
   import Notification from '$lib/components/common/Notification.svelte';
@@ -13,6 +13,8 @@
   let isAuthorized = false;
   let errorMessage = '';
   let showError = false;
+  let debugInfo = '';
+  let showDebug = false;
   
   onMount(async () => {
     try {
@@ -28,36 +30,53 @@
         return;
       }
       
-      console.log('[SiteMaster] User email:', session.user.email);
+      // Debug information
+      debugInfo = `User email: ${session.user.email}, User ID: ${session.user.id}`;
+      showDebug = true;
+      console.log('[SiteMaster] ' + debugInfo);
       
       // Check if user is site master
       const isSiteMaster = await checkIfSiteMaster();
       console.log('[SiteMaster] Is site master check result:', isSiteMaster);
+      debugInfo += `\nSiteMaster check: ${isSiteMaster}`;
       
-      if (!isSiteMaster) {
-        // Check if the email domain is @sandoog.com as a fallback
-        if (session.user.email && session.user.email.toLowerCase().endsWith('@sandoog.com')) {
-          console.log('[SiteMaster] Email domain check passed, granting access');
-          // Ensure database is updated
+      // Check directly if it's a sandoog.com email
+      const isSandoogEmail = session.user.email && session.user.email.toLowerCase().endsWith('@sandoog.com');
+      debugInfo += `\nEmail domain check: ${isSandoogEmail}`;
+      
+      if (!isSiteMaster && !isSandoogEmail) {
+        console.error('[SiteMaster] User not authorized');
+        errorMessage = 'You are not authorized to access the site master dashboard';
+        showError = true;
+        goto('/');
+        return;
+      }
+      
+      // At this point, user is authorized
+      isAuthorized = true;
+      
+      // If it's a sandoog.com email but not marked as site master in database, update the record
+      if (isSandoogEmail) {
+        debugInfo += `\nUpdating user record for sandoog.com email`;
+        
+        // Get user data first to check current status
+        const { data: userData } = await supabase
+          .from('users')
+          .select('is_site_master, is_admin')
+          .eq('id', session.user.id)
+          .single();
+          
+        if (userData && (!userData.is_site_master || !userData.is_admin)) {
+          console.log('[SiteMaster] Updating user record to set site master flags');
           await supabase
             .from('users')
-            .upsert({
-              id: session.user.id,
-              email: session.user.email,
+            .update({
+              is_site_master: true,
               is_admin: true,
-              is_site_master: true
-            });
-          
-          isAuthorized = true;
-        } else {
-          console.error('[SiteMaster] User not authorized');
-          errorMessage = 'You are not authorized to access the site master dashboard';
-          showError = true;
-          goto('/');
-          return;
+              updated_at: new Date()
+            })
+            .eq('id', session.user.id);
         }
-      } else {
-        isAuthorized = true;
       }
       
       // Try to get data with error handling for each request
@@ -66,6 +85,7 @@
       console.error('[SiteMaster] Unexpected error:', error);
       errorMessage = 'An unexpected error occurred. Please try again.';
       showError = true;
+      debugInfo += `\nError: ${JSON.stringify(error)}`;
     } finally {
       loading = false;
     }
@@ -106,15 +126,29 @@
     
     // Get total users count - handle errors gracefully
     try {
-      const { count: userCount, error: userError } = await supabase
+      // Change the query to use auth.users instead, which should always have users
+      const { data: userData, error: userError } = await supabase
         .from('users')
-        .select('id', { count: 'exact', head: true });
+        .select('id');
         
-      if (!userError) {
-        totalUsers = userCount || 0;
+      if (!userError && userData) {
+        totalUsers = userData.length;
+        console.log('[SiteMaster] Users count:', totalUsers);
       } else {
         console.error('[SiteMaster] Error fetching users count:', userError);
-        totalUsers = 0;
+        // Try alternative method using auth.users
+        try {
+          const { count, error: authUserError } = await supabase.rpc('get_total_users_count');
+          if (!authUserError) {
+            totalUsers = count || 0;
+            console.log('[SiteMaster] Users count from RPC:', totalUsers);
+          } else {
+            totalUsers = 0;
+          }
+        } catch (fallbackError) {
+          console.error('[SiteMaster] Fallback user count error:', fallbackError);
+          totalUsers = 0;
+        }
       }
     } catch (error) {
       console.error('[SiteMaster] User count error:', error);
@@ -144,7 +178,28 @@
   <title>Site Master Dashboard | Sandoog</title>
 </svelte:head>
 
-{#if isAuthorized}
+{#if loading}
+  <div class="flex justify-center">
+    <div class="animate-pulse text-center">
+      <p class="text-gray-600">Loading dashboard...</p>
+    </div>
+  </div>
+{:else if !isAuthorized}
+  {#if showError}
+    <Notification type="error" message={errorMessage} />
+  {/if}
+{:else}
+  {#if showError}
+    <Notification type="error" message={errorMessage} />
+  {/if}
+  
+  {#if showDebug}
+    <div class="bg-yellow-100 border-l-4 border-yellow-500 p-4 mb-6 rounded">
+      <h3 class="text-yellow-800 font-medium">Debug Information</h3>
+      <pre class="mt-2 text-xs text-yellow-700 whitespace-pre-wrap">{debugInfo}</pre>
+    </div>
+  {/if}
+  
   <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
     <div class="mb-8">
       <h1 class="text-3xl font-bold text-gray-900">Site Master Dashboard</h1>
@@ -263,29 +318,4 @@
       </div>
     {/if}
   </div>
-{:else if loading}
-  <div class="flex items-center justify-center h-screen">
-    <div class="animate-spin rounded-full h-12 w-12 border-t-4 border-b-4 border-indigo-500"></div>
-  </div>
-{:else}
-  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 text-center">
-    <div class="bg-red-50 shadow overflow-hidden sm:rounded-lg p-6">
-      <h2 class="text-2xl font-bold text-red-800">Access Denied</h2>
-      <p class="mt-4 text-red-600">
-        You are not authorized to access the site master dashboard.
-      </p>
-      <div class="mt-6">
-        <a href="/" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
-          Return to Home
-        </a>
-      </div>
-    </div>
-  </div>
-{/if}
-
-<Notification
-  type="error"
-  message={errorMessage}
-  bind:show={showError}
-  on:close={() => (showError = false)}
-/> 
+{/if} 

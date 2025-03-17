@@ -21,6 +21,8 @@ export async function loginUser(email: string, password: string) {
       currentUser.set({
         id: '00000000-0000-0000-0000-000000000000',
         email: 'admin@sandoog.com',
+        first_name: null,
+        last_name: null,
         is_admin: true,
         is_site_master: true,
         group_id: null
@@ -52,7 +54,7 @@ export async function loginUser(email: string, password: string) {
           email: email,
           is_admin: true,
           is_site_master: true
-        });
+        }, { onConflict: 'id' });
     } else if (!userData.is_site_master) {
       // Update the user to be a site master
       await supabase
@@ -65,6 +67,8 @@ export async function loginUser(email: string, password: string) {
     currentUser.set({
       id: data.user.id,
       email: email,
+      first_name: userData?.first_name || null,
+      last_name: userData?.last_name || null,
       is_admin: true,
       is_site_master: true,
       group_id: userData?.group_id || null
@@ -111,6 +115,8 @@ export async function signupUser(email: string, password: string) {
   currentUser.set({
     id: data.user!.id,
     email: email,
+    first_name: null,
+    last_name: null,
     is_admin: false,
     is_site_master: false,
     group_id: null
@@ -141,6 +147,8 @@ export async function getUserRoles(userId: string): Promise<UserWithRoles> {
     return {
       id: userId,
       email: '',
+      first_name: null,
+      last_name: null,
       is_admin: false,
       is_site_master: false,
       group_id: null
@@ -181,86 +189,118 @@ export async function canRequestAdminStatus(userId: string) {
   try {
     console.log('[AdminRequest] Checking eligibility for user ID:', userId);
     
-    // First check if user already has any admin requests (regardless of status)
-    // Use a more direct approach instead of complex filters
-    const { data: existingRequests, error: requestError } = await supabase
-      .from('admin_requests')
-      .select('status, requested_at')
-      .eq('user_id', userId)
-      .order('requested_at', { ascending: false });
-      
-    console.log('[AdminRequest] Request check result:', { data: existingRequests, error: requestError });
-    
-    if (requestError) {
-      // If there's a database error (e.g., table doesn't exist), log it but allow the request
-      console.error('[AdminRequest] Error checking for existing requests:', requestError);
-      // Continue with other checks
-    } else if (existingRequests && existingRequests.length > 0) {
-      // If any requests exist, check the status of the most recent one
-      const latestRequest = existingRequests[0];
-      console.log('[AdminRequest] Found existing request with status:', latestRequest.status);
-      
-      if (latestRequest.status === 'pending' || latestRequest.status === 'approved') {
-        return { 
-          eligible: false, 
-          error: `You already have an ${latestRequest.status} admin request (from ${new Date(latestRequest.requested_at).toLocaleDateString()})` 
-        };
-      }
-      
-      // If the latest request was rejected, they can apply again
-      if (latestRequest.status === 'rejected') {
-        console.log('[AdminRequest] User has a rejected request, can apply again');
-        // Continue with other checks
-      }
-    }
-      
-    // Then check user attributes
-    const { data: userData, error: userError } = await supabase
-      .from('users')
-      .select('is_admin, is_site_master, group_id')
-      .eq('id', userId)
-      .single();
-      
-    console.log('[AdminRequest] User data check result:', { data: userData, error: userError });
-    
-    if (userError) {
-      console.error('[AdminRequest] Error checking user data:', userError);
-      return { eligible: false, error: 'Unable to verify user status. Please try again later.' };
+    if (!userId) {
+      return { eligible: false, error: 'User ID is required' };
     }
     
-    if (userData) {
-      if (userData.is_admin) {
-        return { eligible: false, error: 'You are already an admin' };
+    // Check if the user exists in auth first
+    try {
+      const { data: authData, error: authError } = await supabase.auth.getUser(userId);
+      
+      if (authError || !authData.user) {
+        console.error('[AdminRequest] User not found in auth system:', authError);
+        return { eligible: false, error: 'Could not verify user in authentication system' };
       }
       
-      if (userData.is_site_master) {
-        return { eligible: false, error: 'Site masters already have admin privileges' };
+      // Check if email is from sandoog.com domain
+      const email = authData.user.email;
+      if (email && email.toLowerCase().endsWith('@sandoog.com')) {
+        return { eligible: false, error: 'Users with sandoog.com emails are automatically site masters' };
       }
-      
-      if (userData.group_id) {
-        return { eligible: false, error: 'You already belong to a group and cannot be an admin' };
-      }
+    } catch (err) {
+      console.error('[AdminRequest] Error checking auth status:', err);
+      // Continue with other checks, don't return early
     }
     
-    // Finally check for pending join requests
-    const { count: joinRequestCount, error: joinError } = await supabase
-      .from('group_join_requests')
-      .select('id', { count: 'exact', head: true })
-      .eq('user_id', userId)
-      .eq('status', 'pending');
-      
-    console.log('[AdminRequest] Join request check result:', { count: joinRequestCount, error: joinError });
+    // First check if user already has any admin requests
+    let existingRequests = [];
     
-    if (!joinError && joinRequestCount && joinRequestCount > 0) {
-      return { eligible: false, error: 'You have pending group join requests' };
+    try {
+      const { data: requestData, error: requestError } = await supabase
+        .from('admin_requests')
+        .select('status, requested_at')
+        .eq('user_id', userId)
+        .order('requested_at', { ascending: false });
+      
+      if (!requestError && requestData) {
+        existingRequests = requestData;
+        
+        // If any active requests exist, the user is not eligible
+        if (existingRequests.length > 0) {
+          const latestRequest = existingRequests[0];
+          
+          if (latestRequest.status === 'pending') {
+            return { 
+              eligible: false, 
+              error: `You already have a pending admin request from ${new Date(latestRequest.requested_at).toLocaleDateString()}` 
+            };
+          }
+          
+          if (latestRequest.status === 'approved') {
+            return { 
+              eligible: false, 
+              error: 'You already have an approved admin request' 
+            };
+          }
+          
+          // If rejected, they can apply again, continue with checks
+        }
+      } else if (requestError && !requestError.message?.includes('does not exist')) {
+        // Only log and continue if it's not a "table doesn't exist" error
+        console.error('[AdminRequest] Error checking existing requests:', requestError);
+      }
+    } catch (err) {
+      console.warn('[AdminRequest] Error checking admin requests, continuing:', err);
+      // Continue with user checks
     }
     
-    // If all checks pass, user is eligible
-    console.log('[AdminRequest] User is eligible for admin request');
+    // Then check user attributes in the users table
+    try {
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('is_admin, is_site_master, group_id')
+        .eq('id', userId)
+        .single();
+      
+      // If user not found in users table but exists in auth, they're eligible
+      if (userError && userError.code === 'PGRST116') {
+        console.log('[AdminRequest] User not found in users table, eligible as new user');
+        return { eligible: true, error: null };
+      }
+      
+      if (userError) {
+        console.error('[AdminRequest] Error checking user data:', userError);
+        return { eligible: true, error: null }; // Give benefit of doubt
+      }
+      
+      if (userData) {
+        // Check specific conditions that would make user ineligible
+        if (userData.is_admin) {
+          return { eligible: false, error: 'You are already an admin' };
+        }
+        
+        if (userData.is_site_master) {
+          return { eligible: false, error: 'Site masters already have admin privileges' };
+        }
+        
+        if (userData.group_id) {
+          return { eligible: false, error: 'You already belong to a group and cannot be an admin' };
+        }
+        
+        // If we got here, user is eligible
+        return { eligible: true, error: null };
+      }
+    } catch (err) {
+      console.error('[AdminRequest] Unexpected error checking user attributes:', err);
+      // Continue to fallback
+    }
+    
+    // Fallback - give benefit of doubt if all checks pass without conclusive result
+    console.log('[AdminRequest] Using fallback eligibility check result: eligible');
     return { eligible: true, error: null };
   } catch (error) {
-    console.error('[AdminRequest] Admin eligibility check failed:', error);
-    return { eligible: false, error: 'Unable to check eligibility' };
+    console.error('[AdminRequest] Unexpected error in eligibility check:', error);
+    return { eligible: false, error: 'Unable to verify eligibility. Please try again later.' };
   }
 }
 

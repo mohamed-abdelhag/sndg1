@@ -11,6 +11,8 @@ export const supabase = createClient<Database>(
 export type UserWithRoles = {
   id: string;
   email: string;
+  first_name: string | null;
+  last_name: string | null;
   is_admin: boolean;
   is_site_master: boolean;
   group_id: string | null;
@@ -27,7 +29,7 @@ export async function getCurrentUserWithRoles(): Promise<UserWithRoles | null> {
   // Get the extended user data from auth.users
   const { data, error } = await supabase
     .from('users')
-    .select('id, email, is_admin, is_site_master, group_id')
+    .select('id, email, first_name, last_name, is_admin, is_site_master, group_id')
     .eq('id', session.user.id)
     .single();
   
@@ -38,62 +40,197 @@ export async function getCurrentUserWithRoles(): Promise<UserWithRoles | null> {
   return data as UserWithRoles;
 }
 
-export async function signupUser(email: string, password: string): Promise<{
-  user: User | null;
-  session: Session | null;
-  error: { message: string; code?: string } | null;
-}> {
-  console.log('[Auth] Signup attempt for:', email);
+export async function signupUser({
+  email,
+  password,
+  firstName,
+  lastName,
+}: {
+  email: string;
+  password: string;
+  firstName?: string;
+  lastName?: string;
+}) {
   try {
+    console.log("[Auth] Signup attempt with email:", email);
+    
+    // Check if user already exists first
+    const { data: existingUsers } = await supabase
+      .from('users')
+      .select('email')
+      .eq('email', email)
+      .limit(1);
+      
+    if (existingUsers && existingUsers.length > 0) {
+      console.error("[Auth] Email already in use:", email);
+      return { 
+        data: null, 
+        error: { 
+          message: 'Email address is already in use. Please use a different email or try logging in.',
+          name: 'EmailExistsError'
+        } 
+      };
+    }
+    
+    // Create the user with Supabase auth
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
-        emailRedirectTo: `${location.origin}/auth/callback`
-      }
+        emailRedirectTo: window.location.origin + '/auth/login',
+        // Ensure no auto-login after signup
+        data: {
+          first_name: firstName,
+          last_name: lastName
+        }
+      },
     });
-
-    console.log('[Auth] Signup response:', { data, error });
     
-    return {
-      user: data?.user || null,
-      session: data?.session || null,
-      error: error ? { message: error.message, code: error.code } : null
-    };
-  } catch (err) {
-    console.error('[Auth] Signup error:', err);
-    return {
-      user: null,
-      session: null,
-      error: {
-        message: 'Failed to create account',
-        code: 'UNKNOWN_ERROR'
+    if (error) {
+      console.error("[Auth] Signup error:", error);
+      return { data: null, error };
+    }
+
+    console.log("[Auth] Signup successful, creating user entry in users table");
+    
+    // If signup succeeded, add the user to the users table
+    if (data?.user) {
+      try {
+        const { data: userData, error: userError } = await supabase
+          .from('users')
+          .upsert({
+            id: data.user.id,
+            email: data.user.email || email,
+            first_name: firstName || null,
+            last_name: lastName || null,
+            is_admin: email.endsWith('@sandoog.com'),
+            is_site_master: email.endsWith('@sandoog.com'),
+            created_at: new Date(),
+            updated_at: new Date(),
+          }, {
+            onConflict: 'id',
+            ignoreDuplicates: false,
+          });
+          
+        if (userError) {
+          console.error("[Auth] Error creating user entry:", userError);
+          // We don't return the error here since we still want the signup to succeed
+        } else {
+          console.log("[Auth] User entry created successfully");
+        }
+      } catch (userCreateError) {
+        console.error("[Auth] Exception creating user entry:", userCreateError);
+        // Continue despite error, the user is still created in auth
       }
+    }
+    
+    // Sign out the user to prevent auto-login
+    await supabase.auth.signOut();
+    
+    return { data, error: null };
+  } catch (err) {
+    console.error("[Auth] Signup exception:", err);
+    return { 
+      data: null, 
+      error: { 
+        message: 'An unexpected error occurred during signup. Please try again.',
+        name: 'SignupError'
+      } 
     };
   }
 }
 
-export async function signInWithPassword(email: string, password: string) {
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-  
-  if (email === 'admin@sandoog.com') {
-    // Explicitly check for site master status
-    const { data: userData } = await supabase
-      .from('users')
-      .select('is_site_master')
-      .eq('email', email)
-      .single();
-
-    if (userData?.is_site_master) {
-      return { 
-        data: { 
-          user: { ...data?.user, is_site_master: true }, 
-          session: data?.session 
-        }, 
-        error: null 
-      };
+export async function signInWithPassword({
+  email,
+  password,
+}: {
+  email: string;
+  password: string;
+}) {
+  try {
+    console.log("[Auth] Login attempt with email:", email);
+    
+    // Authenticate the user
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+    
+    if (error) {
+      console.error("[Auth] Login error:", error);
+      return { data: null, error };
     }
+    
+    console.log("[Auth] Login successful, verifying user record exists");
+    
+    // If login succeeded, ensure the user exists in the users table
+    if (data?.user) {
+      try {
+        // Check if user exists in the users table
+        const { data: existingUser, error: queryError } = await supabase
+          .from('users')
+          .select('*')
+          .eq('id', data.user.id)
+          .single();
+          
+        if (queryError || !existingUser) {
+          console.log("[Auth] User not found in users table, creating new entry");
+          
+          // User doesn't exist in users table, create an entry
+          const isSandoogEmail = email.endsWith('@sandoog.com');
+          
+          const { data: userData, error: userError } = await supabase
+            .from('users')
+            .upsert({
+              id: data.user.id,
+              email: data.user.email,
+              is_admin: isSandoogEmail,
+              is_site_master: isSandoogEmail,
+              created_at: new Date(),
+              updated_at: new Date(),
+            }, {
+              onConflict: 'id',
+              ignoreDuplicates: false,
+            });
+            
+          if (userError) {
+            console.error("[Auth] Error creating user entry during login:", userError);
+          } else {
+            console.log("[Auth] User entry created successfully during login");
+          }
+        } else if (email.endsWith('@sandoog.com') && 
+                  (!existingUser.is_site_master || !existingUser.is_admin)) {
+          // Update sandoog.com users to be site masters and admins if they aren't already
+          console.log("[Auth] Updating privileges for @sandoog.com user");
+          
+          const { error: updateError } = await supabase
+            .from('users')
+            .update({
+              is_admin: true,
+              is_site_master: true,
+              updated_at: new Date(),
+            })
+            .eq('id', data.user.id);
+            
+          if (updateError) {
+            console.error("[Auth] Error updating user privileges:", updateError);
+          }
+        }
+      } catch (userCheckError) {
+        console.error("[Auth] Exception checking user record:", userCheckError);
+        // Continue despite error, the login is still successful
+      }
+    }
+    
+    return { data, error: null };
+  } catch (err) {
+    console.error("[Auth] Login exception:", err);
+    return { 
+      data: null, 
+      error: { 
+        message: 'An unexpected error occurred during login. Please try again.',
+        name: 'LoginError'
+      }
+    };
   }
-  
-  return { data, error };
 } 

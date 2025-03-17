@@ -192,36 +192,31 @@
     processingId = requestId;
     
     try {
-      // Update the admin request
-      const { error: updateError } = await supabase
-        .from('admin_requests')
-        .update({
-          status: 'approved',
-          responded_at: new Date().toISOString(),
-          responded_by: (await supabase.auth.getSession()).data.session?.user.id
-        })
-        .eq('id', requestId);
+      // Get current user ID
+      const currentUserId = (await supabase.auth.getSession()).data.session?.user.id;
       
-      if (updateError) throw updateError;
+      if (!currentUserId) {
+        throw new Error('Not authenticated');
+      }
       
-      // Get the request to find the user_id
-      const { data: requestData, error: requestError } = await supabase
-        .from('admin_requests')
-        .select('user_id')
-        .eq('id', requestId)
-        .single();
+      // Use the approve_admin_request RPC function as defined in supabase.md
+      const { data: approved, error: approveError } = await supabase.rpc(
+        'approve_admin_request',
+        {
+          request_id: requestId,
+          approved_by: currentUserId
+        }
+      );
       
-      if (requestError || !requestData) throw requestError || new Error('Failed to get request data');
+      if (approveError) {
+        throw approveError;
+      }
       
-      // Update the user to be an admin
-      const { error: userError } = await supabase
-        .from('users')
-        .update({ is_admin: true })
-        .eq('id', requestData.user_id);
+      if (!approved) {
+        throw new Error('Approval failed');
+      }
       
-      if (userError) throw userError;
-      
-      // Success message and reload
+      // Success message
       successMessage = 'Request approved successfully';
       showSuccess = true;
       

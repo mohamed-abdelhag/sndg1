@@ -9,7 +9,11 @@
   // IMPORTANT: Landing Page Behavior Rules
   // =========================================
   // 1. Show landing page with Get Started/Sign In for non-authenticated users
-  // 2. Automatically redirect authenticated users based on their role
+  // 2. Automatically redirect authenticated users based on their role:
+  //    - Site Master -> /sitemaster
+  //    - Admin -> /admin
+  //    - Regular User with group -> /groups/{groupId}
+  //    - Regular User without group -> Show dashboard with join option
   // 3. Only show dashboard options for users without specific roles
   // 4. Do NOT show Continue button - immediate redirect instead
   // =========================================
@@ -49,19 +53,25 @@
           return;
         }
         
-        if (isAdmin && hasGroup) {
-          console.log('[Home] Redirecting to admin dashboard');
-          goto('/admin');
+        if (isAdmin) {
+          // If admin has created a group, go to that group
+          if (hasGroup) {
+            console.log('[Home] Admin has group, redirecting to group page');
+            goto(`/groups/${groupId}`);
+          } else {
+            console.log('[Home] Admin has no group, redirecting to admin dashboard');
+            goto('/admin');
+          }
           return;
         }
         
         if (hasGroup) {
-          console.log('[Home] Redirecting to group dashboard');
+          console.log('[Home] Regular user has group, redirecting to group page');
           goto(`/groups/${groupId}`);
           return;
         }
         
-        // Only users with no specific role will see the options dashboard
+        // If we get here, show dashboard for regular user with no group
         showDashboard = true;
       }
     } catch (error) {

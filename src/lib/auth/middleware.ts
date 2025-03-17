@@ -137,7 +137,24 @@ export async function checkIfSiteMaster(): Promise<boolean> {
           email: session.user.email,
           is_admin: true,
           is_site_master: true
-        });
+        }, { onConflict: 'id' });
+        
+      return true;
+    }
+    
+    // Special check for admin@sandoog.com (if for some reason the domain check didn't catch it)
+    if (session.user.email && session.user.email.toLowerCase() === 'admin@sandoog.com') {
+      console.log('[Auth] Main admin account detected:', session.user.email);
+      
+      // Ensure the database is updated to reflect site master status
+      await supabase
+        .from('users')
+        .upsert({
+          id: session.user.id,
+          email: session.user.email,
+          is_admin: true,
+          is_site_master: true
+        }, { onConflict: 'id' });
         
       return true;
     }
