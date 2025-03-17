@@ -2,10 +2,34 @@ import { createClient, type User, type Session } from '@supabase/supabase-js';
 import { PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY } from '$env/static/public';
 import type { Database } from '$lib/db/supabase-types';
 
-export const supabase = createClient<Database>(
-  PUBLIC_SUPABASE_URL,
-  PUBLIC_SUPABASE_ANON_KEY
+// Add a debug flag
+export const DEBUG_MODE = true;
+
+// Create a more robust client with error handling
+export const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_ANON_KEY,
+  {
+    auth: {
+      persistSession: false, // Don't persist session by default - we'll handle this manually
+      storageKey: 'sandoog-auth-token',
+      autoRefreshToken: true,
+      detectSessionInUrl: true
+    }
+  }
 );
+
+// Helper to safely execute database operations with proper error handling
+export async function safeQuery<T>(operation: () => any) {
+  try {
+    return await operation();
+  } catch (error) {
+    if (DEBUG_MODE) {
+      console.error('[Supabase] Error executing query:', error);
+    }
+    return { data: null as unknown as T, error };
+  }
+}
 
 // Define user types based on our extended auth.users table
 export type UserWithRoles = {
@@ -140,97 +164,94 @@ export async function signupUser({
   }
 }
 
-export async function signInWithPassword({
-  email,
-  password,
-}: {
-  email: string;
-  password: string;
-}) {
+// Modified auth functions with better logging
+export async function signInWithPassword({ email, password }: { email: string; password: string }) {
+  if (DEBUG_MODE) {
+    console.log('[Auth] Login attempt with email:', email);
+  }
+  
   try {
-    console.log("[Auth] Login attempt with email:", email);
-    
-    // Authenticate the user
-    const { data, error } = await supabase.auth.signInWithPassword({
+    const authResult = await supabase.auth.signInWithPassword({
       email,
-      password,
+      password
     });
     
-    if (error) {
-      console.error("[Auth] Login error:", error);
-      return { data: null, error };
+    if (authResult.error) {
+      console.error('[Auth] Login failed:', authResult.error);
+      return authResult;
     }
     
-    console.log("[Auth] Login successful, verifying user record exists");
+    // Successful login
+    if (DEBUG_MODE) {
+      console.log('[Auth] Login successful, verifying user record exists');
+    }
     
-    // If login succeeded, ensure the user exists in the users table
-    if (data?.user) {
+    // Check if user exists in users table and create if not
+    const userId = authResult.data.user?.id;
+    if (userId) {
       try {
-        // Check if user exists in the users table
-        const { data: existingUser, error: queryError } = await supabase
+        const { data: userData, error: userError } = await supabase
           .from('users')
           .select('*')
-          .eq('id', data.user.id)
+          .eq('id', userId)
           .single();
-          
-        if (queryError || !existingUser) {
-          console.log("[Auth] User not found in users table, creating new entry");
-          
-          // User doesn't exist in users table, create an entry
-          const isSandoogEmail = email.endsWith('@sandoog.com');
-          
-          const { data: userData, error: userError } = await supabase
-            .from('users')
-            .upsert({
-              id: data.user.id,
-              email: data.user.email,
-              is_admin: isSandoogEmail,
-              is_site_master: isSandoogEmail,
-              created_at: new Date(),
-              updated_at: new Date(),
-            }, {
-              onConflict: 'id',
-              ignoreDuplicates: false,
-            });
-            
-          if (userError) {
-            console.error("[Auth] Error creating user entry during login:", userError);
-          } else {
-            console.log("[Auth] User entry created successfully during login");
+        
+        if (userError || !userData) {
+          if (DEBUG_MODE) {
+            console.log('[Auth] User not found in users table, creating new entry');
           }
-        } else if (email.endsWith('@sandoog.com') && 
-                  (!existingUser.is_site_master || !existingUser.is_admin)) {
-          // Update sandoog.com users to be site masters and admins if they aren't already
-          console.log("[Auth] Updating privileges for @sandoog.com user");
           
-          const { error: updateError } = await supabase
-            .from('users')
-            .update({
-              is_admin: true,
-              is_site_master: true,
-              updated_at: new Date(),
-            })
-            .eq('id', data.user.id);
-            
-          if (updateError) {
-            console.error("[Auth] Error updating user privileges:", updateError);
+          const isSandoogEmail = email.toLowerCase().endsWith('@sandoog.com');
+          
+          try {
+            await supabase
+              .from('users')
+              .upsert({
+                id: userId,
+                email: email.toLowerCase(),
+                is_admin: isSandoogEmail,
+                is_site_master: isSandoogEmail,
+                created_at: new Date(),
+                updated_at: new Date()
+              }, { onConflict: 'id' });
+          } catch (insertError) {
+            // Log error but don't block login
+            console.error('[Auth] Error creating user entry during login:', insertError);
           }
         }
-      } catch (userCheckError) {
-        console.error("[Auth] Exception checking user record:", userCheckError);
-        // Continue despite error, the login is still successful
+      } catch (error) {
+        // Log error but don't block login process
+        console.error('[Auth] Error checking/creating user record:', error);
       }
     }
     
-    return { data, error: null };
-  } catch (err) {
-    console.error("[Auth] Login exception:", err);
-    return { 
-      data: null, 
-      error: { 
-        message: 'An unexpected error occurred during login. Please try again.',
-        name: 'LoginError'
-      }
-    };
+    return authResult;
+  } catch (error) {
+    console.error('[Auth] Unexpected error during login:', error);
+    return { data: {}, error };
+  }
+}
+
+// Force logout and clear all session data
+export async function forceLogout() {
+  try {
+    await supabase.auth.signOut({ scope: 'global' });
+    localStorage.removeItem('sandoog-auth-token');
+    sessionStorage.clear();
+    
+    // Attempt to clear any cookies
+    document.cookie.split(';').forEach(cookie => {
+      const [name] = cookie.trim().split('=');
+      document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`;
+    });
+    
+    if (DEBUG_MODE) {
+      console.log('[Auth] User completely logged out');
+    }
+    
+    return { success: true };
+  } catch (error) {
+    console.error('[Auth] Error during logout:', error);
+    return { success: false, error };
   }
 } 

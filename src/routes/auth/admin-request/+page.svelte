@@ -18,7 +18,8 @@
 </script>
 
 <svelte:head>
-  <title>Request Admin Status - Sandoog</title>
+  <title>Admin Request - Sandoog</title>
+  <meta name="description" content="Request admin privileges to create and manage your own group" />
 </svelte:head>
 
 <div class="min-h-screen bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">

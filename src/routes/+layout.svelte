@@ -4,20 +4,42 @@
 	import { supabase } from '$lib/auth/supabase';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
+	import { forceLogout } from '$lib/auth/supabase';
 	
 	let isAuthenticated = false;
 	let isLoading = true;
 	let shouldShowHeader = true;
 	
 	onMount(async () => {
+		// Check authentication status on every mount
 		const { data: { session } } = await supabase.auth.getSession();
 		isAuthenticated = !!session;
-		isLoading = false;
 		
+		// If on a protected route but not authenticated, redirect to login
+		const path = $page.url.pathname;
+		const isAuthRoute = path.startsWith('/auth/');
+		const isPublicRoute = path === '/' || isAuthRoute;
+		
+		if (!isAuthenticated && !isPublicRoute) {
+			console.log('User not authenticated, redirecting to login');
+			// Clear any stale session data
+			await forceLogout();
+			goto('/auth/login');
+			return;
+		}
+		
+		isLoading = false;
 		updateHeaderVisibility();
 		
-		supabase.auth.onAuthStateChange((_event, session) => {
+		supabase.auth.onAuthStateChange(async (event, session) => {
+			console.log('Auth state changed:', event);
 			isAuthenticated = !!session;
+			
+			// On signout, clear any stored session data
+			if (event === 'SIGNED_OUT') {
+				await forceLogout();
+				goto('/auth/login');
+			}
 		});
 	});
 	

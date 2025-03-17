@@ -27,9 +27,13 @@
       });
       
       if (loginError) {
-        error = loginError.message;
+        error = typeof loginError === 'object' && loginError !== null && 'message' in loginError 
+          ? loginError.message as string 
+          : 'Login failed';
         console.error("Login failed:", loginError);
-        debugInfo += `\nLogin error: ${loginError.message}`;
+        debugInfo += `\nLogin error: ${typeof loginError === 'object' && loginError !== null && 'message' in loginError 
+          ? loginError.message 
+          : 'Unknown error'}`;
         return;
       }
       
@@ -53,16 +57,18 @@
         // Ensure database is updated correctly for sandoog.com email users
         // This is a fallback in case the checkUserStatus didn't update it properly
         try {
-          const userId = data.user.id;
-          const { error: updateError } = await fetch('/api/update-site-master', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId })
-          }).then(res => res.json());
-          
-          if (updateError) {
-            console.warn("Could not update site master status:", updateError);
-            debugInfo += `\nWarning: Could not update site master status: ${updateError}`;
+          const userId = data && 'user' in data && data.user ? data.user.id : null;
+          if (userId) {
+            const { error: updateError } = await fetch('/api/update-site-master', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ userId })
+            }).then(res => res.json());
+            
+            if (updateError) {
+              console.warn("Could not update site master status:", updateError);
+              debugInfo += `\nWarning: Could not update site master status: ${updateError}`;
+            }
           }
         } catch (err) {
           console.warn("Error updating site master status:", err);

@@ -89,6 +89,61 @@
     }
   });
   
+  // Add function to check for locally stored pending requests
+  async function checkForLocallyStoredRequests() {
+    console.log('[AdminApprovals] Checking for locally stored admin requests');
+    
+    try {
+      // Get all users
+      const { data: users, error: usersError } = await supabase
+        .from('users')
+        .select('id, email, first_name, last_name');
+        
+      if (usersError) {
+        console.error('[AdminApprovals] Error fetching users:', usersError);
+        return;
+      }
+      
+      // For demo purposes, check if there are any admin requests in our own local storage
+      const pendingLocalRequest = localStorage.getItem('pendingAdminRequest');
+      if (pendingLocalRequest) {
+        try {
+          const localRequest = JSON.parse(pendingLocalRequest);
+          
+          // Find the user
+          const user = users.find(u => u.id === localRequest.user_id);
+          
+          if (user) {
+            // Try to insert the request into the database
+            const { error: insertError } = await supabase
+              .from('admin_requests')
+              .insert([{ 
+                user_id: localRequest.user_id, 
+                reason: localRequest.reason,
+                requested_at: localRequest.requested_at || new Date().toISOString(),
+                status: 'pending'
+              }]);
+              
+            if (!insertError) {
+              console.log('[AdminApprovals] Successfully recovered local request for:', user.email);
+              // Clear the local storage
+              localStorage.removeItem('pendingAdminRequest');
+              // Force a refresh
+              await loadAdminRequests();
+            } else {
+              console.error('[AdminApprovals] Error recovering local request:', insertError);
+            }
+          }
+        } catch (e) {
+          console.error('[AdminApprovals] Error processing local request:', e);
+        }
+      }
+    } catch (error) {
+      console.error('[AdminApprovals] Error in local request recovery:', error);
+    }
+  }
+  
+  // Call this from your existing loadAdminRequests function
   async function loadAdminRequests() {
     console.log('[AdminApprovals] Loading admin requests...');
     
@@ -179,6 +234,9 @@
       
       // Update state with combined data
       adminRequests = adminRequestsWithUsers as AdminRequest[];
+      
+      // Check for locally stored requests
+      await checkForLocallyStoredRequests();
     } catch (error) {
       console.error('[AdminApprovals] Unexpected error loading requests:', error);
       errorMessage = 'An unexpected error occurred loading admin requests.';

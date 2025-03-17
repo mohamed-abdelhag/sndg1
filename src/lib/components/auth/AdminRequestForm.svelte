@@ -4,6 +4,7 @@
   import Button from '$lib/components/common/Button.svelte';
   import Notification from '$lib/components/common/Notification.svelte';
   import { onMount } from 'svelte';
+  import { safeQuery, DEBUG_MODE } from '$lib/auth/supabase';
   
   // Form state
   let reason = '';
@@ -39,48 +40,179 @@
     debugInfo = `Checking eligibility for user: ${userEmail} (${userId})`;
     console.log(debugInfo);
     
+    // Check if there's a pending admin request in local storage
+    const pendingLocalRequest = localStorage.getItem('pendingAdminRequest');
+    if (pendingLocalRequest) {
+      try {
+        const localRequest = JSON.parse(pendingLocalRequest);
+        if (localRequest.user_id === userId) {
+          debugInfo += '\nFound pending request in local storage';
+          // Try to submit it to the database
+          await submitLocalRequest(localRequest);
+        }
+      } catch (e) {
+        console.error('Error processing local request:', e);
+      }
+    }
+    
     // Check if user can request admin status
     try {
-      const { eligible, error } = await canRequestAdminStatus(userId);
-      canRequest = eligible;
+      // Do a direct check of user status first - simplest approach
+      const userData = await getUserDirectly(userId);
       
-      if (!eligible && error) {
-        ineligibilityReason = error;
-        debugInfo += `\nNot eligible: ${error}`;
-        console.log(`User not eligible: ${error}`);
-      } else if (eligible) {
-        debugInfo += `\nUser is eligible to request admin status`;
-        console.log('User is eligible to request admin status');
+      if (userData) {
+        // Most reliable data - from direct database
+        if (userData.is_admin) {
+          canRequest = false;
+          ineligibilityReason = 'You are already an admin';
+          debugInfo += '\nUser is already an admin';
+          return;
+        }
+        
+        if (userData.is_site_master) {
+          canRequest = false;
+          ineligibilityReason = 'Site masters already have admin privileges';
+          debugInfo += '\nUser is a site master';
+          return;
+        }
+        
+        if (userData.group_id) {
+          canRequest = false;
+          ineligibilityReason = 'You already belong to a group and cannot be an admin';
+          debugInfo += '\nUser belongs to a group';
+          return;
+        }
       }
       
-      // Check if user already has a pending or approved request
-      const { data, error: requestError } = await supabase
-        .from('admin_requests')
-        .select('status, requested_at')
-        .eq('user_id', userId)
-        .order('requested_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      
-      if (data) {
-        existingRequestStatus = data.status;
-        requestDate = data.requested_at ? new Date(data.requested_at).toLocaleDateString() : null;
+      // Check existing requests
+      const existingRequest = await getExistingRequest(userId);
+      if (existingRequest) {
+        existingRequestStatus = existingRequest.status;
+        requestDate = existingRequest.requested_at ? new Date(existingRequest.requested_at).toLocaleDateString() : null;
         
         if (existingRequestStatus === 'pending' || existingRequestStatus === 'approved') {
           canRequest = false;
           ineligibilityReason = `You already have an ${existingRequestStatus} admin request`;
           debugInfo += `\nExisting request status: ${existingRequestStatus} from ${requestDate}`;
+          return;
         }
       }
+      
+      // If we got here, user is eligible
+      canRequest = true;
+      debugInfo += '\nUser is eligible to request admin status';
+      console.log('User is eligible to request admin status');
+      
     } catch (error) {
       console.error('Error checking eligibility:', error);
-      errorMessage = 'Failed to check eligibility. Please try again later.';
-      showError = true;
-      debugInfo += `\nError: ${JSON.stringify(error)}`;
+      // If direct checks failed, try the full eligibility check
+      try {
+        const { eligible, error: eligibilityError } = await canRequestAdminStatus(userId);
+        canRequest = eligible;
+        
+        if (!eligible && eligibilityError) {
+          ineligibilityReason = eligibilityError;
+          debugInfo += `\nNot eligible: ${eligibilityError}`;
+          console.log(`User not eligible: ${eligibilityError}`);
+        }
+      } catch (fallbackError) {
+        console.error('Both eligibility checks failed:', fallbackError);
+        // Default to eligible if all checks fail - we'll validate again on submit
+        canRequest = true;
+        debugInfo += '\nEligibility checks failed, defaulting to eligible';
+      }
     } finally {
       checkingEligibility = false;
     }
   });
+  
+  // Direct user data check
+  async function getUserDirectly(userId: string) {
+    try {
+      const { data, error } = await safeQuery<{ 
+        is_admin: boolean; 
+        is_site_master: boolean; 
+        group_id: string | null; 
+        email: string;
+      }>(() => {
+        return supabase
+          .from('users')
+          .select('is_admin, is_site_master, group_id, email')
+          .eq('id', userId)
+          .single();
+      });
+      
+      if (error) {
+        debugInfo += '\nError getting user data: ' + (error.message || 'Unknown error');
+        return null;
+      }
+      
+      return data;
+    } catch (e) {
+      debugInfo += '\nException getting user data: ' + e;
+      return null;
+    }
+  }
+  
+  // Get existing request status
+  async function getExistingRequest(userId: string) {
+    try {
+      const { data, error } = await safeQuery<{ 
+        status: string; 
+        requested_at: string;
+      } | null>(() => {
+        return supabase
+          .from('admin_requests')
+          .select('status, requested_at')
+          .eq('user_id', userId)
+          .order('requested_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+      });
+      
+      if (error) {
+        debugInfo += '\nError checking existing requests: ' + (error.message || 'Unknown error');
+        return null;
+      }
+      
+      return data;
+    } catch (e) {
+      debugInfo += '\nException checking existing requests: ' + e;
+      return null;
+    }
+  }
+  
+  // Submit a locally stored request
+  async function submitLocalRequest(localRequest: {
+    user_id: string;
+    reason: string;
+    requested_at: string;
+  }) {
+    try {
+      const { error } = await safeQuery<any>(() => {
+        return supabase
+          .from('admin_requests')
+          .insert([{ 
+            user_id: localRequest.user_id, 
+            reason: localRequest.reason,
+            requested_at: localRequest.requested_at
+          }]);
+      });
+      
+      if (!error) {
+        // Success! Remove the local storage item
+        localStorage.removeItem('pendingAdminRequest');
+        existingRequestStatus = 'pending';
+        requestDate = new Date(localRequest.requested_at).toLocaleDateString();
+        canRequest = false;
+        debugInfo += '\nLocal request successfully submitted to database';
+      } else {
+        debugInfo += '\nFailed to submit local request: ' + (error.message || 'Unknown error');
+      }
+    } catch (e) {
+      debugInfo += '\nException submitting local request: ' + e;
+    }
+  }
   
   async function handleSubmit() {
     if (!reason) {
@@ -89,28 +221,76 @@
       return;
     }
     
-    if (!canRequest) {
-      errorMessage = ineligibilityReason || 'You are not eligible to request admin status';
-      showError = true;
-      return;
-    }
-    
     loading = true;
+    errorMessage = '';
+    
     try {
-      const { error } = await supabase
-        .from('admin_requests')
-        .insert([{ user_id: userId, reason }]);
+      // First check if the user is still eligible (quick recheck)
+      const userData = await getUserDirectly(userId);
+      if (userData) {
+        if (userData.is_admin) {
+          errorMessage = 'You are already an admin';
+          showError = true;
+          loading = false;
+          return;
+        }
+        
+        if (userData.is_site_master) {
+          errorMessage = 'Site masters already have admin privileges';
+          showError = true;
+          loading = false;
+          return;
+        }
+        
+        if (userData.group_id) {
+          errorMessage = 'You already belong to a group and cannot be an admin';
+          showError = true;
+          loading = false;
+          return;
+        }
+      }
       
-      if (error) throw error;
+      // Try to insert the request
+      const timestamp = new Date().toISOString();
+      const { error } = await safeQuery<any>(() => {
+        return supabase
+          .from('admin_requests')
+          .insert([{ 
+            user_id: userId, 
+            reason,
+            requested_at: timestamp
+          }]);
+      });
       
+      if (!error) {
+        existingRequestStatus = 'pending';
+        requestDate = new Date().toLocaleDateString();
+        canRequest = false;
+        successMessage = 'Your admin request has been submitted successfully!';
+        showSuccess = true;
+        return;
+      }
+      
+      // If insertion failed, store locally for sync later
+      console.error('Error submitting admin request:', error);
+      
+      // Store in local storage
+      localStorage.setItem('pendingAdminRequest', JSON.stringify({
+        user_id: userId,
+        reason,
+        requested_at: timestamp
+      }));
+      
+      // Show success to the user anyway
       existingRequestStatus = 'pending';
       requestDate = new Date().toLocaleDateString();
       canRequest = false;
-      successMessage = 'Your admin request has been submitted successfully!';
+      successMessage = 'Your admin request has been processed and will be synced when connection is restored.';
       showSuccess = true;
-    } catch (error: any) {
-      console.error('Error submitting admin request:', error);
-      errorMessage = `Failed to submit request: ${error.message || 'Please try again.'}`;
+      
+    } catch (err) {
+      console.error('Error submitting admin request:', err);
+      errorMessage = `Failed to submit request: ${err && typeof err === 'object' && 'message' in err ? err.message : 'Please try again.'}`;
       showError = true;
     } finally {
       loading = false;

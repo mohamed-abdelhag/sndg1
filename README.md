@@ -225,3 +225,113 @@ $$;
 -- Grant execute permission to authenticated users
 GRANT EXECUTE ON FUNCTION get_total_users_count() TO authenticated;
 ```
+
+## Add RPC Function for Handling Admin Requests with Table Creation
+
+Create this RPC function in Supabase SQL Editor to handle admin requests even if the table doesn't exist yet:
+
+```sql
+-- Function to ensure admin_requests table exists and insert a request
+CREATE OR REPLACE FUNCTION ensure_admin_request(p_user_id UUID, p_reason TEXT)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER -- Run with function owner's privileges
+AS $$
+BEGIN
+  -- Create the admin_requests table if it doesn't exist
+  BEGIN
+    CREATE TABLE IF NOT EXISTS public.admin_requests (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      user_id UUID NOT NULL REFERENCES auth.users(id),
+      reason TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      requested_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+      responded_at TIMESTAMP WITH TIME ZONE,
+      responded_by UUID REFERENCES auth.users(id),
+      updated_at TIMESTAMP WITH TIME ZONE
+    );
+  EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'Error creating table: %', SQLERRM;
+  END;
+  
+  -- Add RLS if it's a new table
+  BEGIN
+    -- Check if RLS is enabled
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_tables 
+      WHERE tablename = 'admin_requests' 
+      AND rowsecurity = true
+    ) THEN
+      -- Enable RLS
+      ALTER TABLE public.admin_requests ENABLE ROW LEVEL SECURITY;
+      
+      -- Policy for site masters to read all requests
+      CREATE POLICY "Site masters can view all admin requests" ON public.admin_requests
+        FOR SELECT USING (
+          EXISTS (
+            SELECT 1 FROM public.users
+            WHERE id = auth.uid() AND is_site_master = true
+          )
+        );
+      
+      -- Policy for site masters to update requests
+      CREATE POLICY "Site masters can update admin requests" ON public.admin_requests
+        FOR UPDATE USING (
+          EXISTS (
+            SELECT 1 FROM public.users
+            WHERE id = auth.uid() AND is_site_master = true
+          )
+        );
+      
+      -- Policy for users to insert their own requests
+      CREATE POLICY "Users can create their own admin requests" ON public.admin_requests
+        FOR INSERT WITH CHECK (
+          auth.uid() = user_id
+        );
+      
+      -- Policy for users to view their own requests
+      CREATE POLICY "Users can view their own admin requests" ON public.admin_requests
+        FOR SELECT USING (
+          auth.uid() = user_id
+        );
+    END IF;
+  EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'Error setting up RLS: %', SQLERRM;
+  END;
+  
+  -- Insert the admin request
+  BEGIN
+    INSERT INTO public.admin_requests (user_id, reason)
+    VALUES (p_user_id, p_reason);
+  EXCEPTION WHEN OTHERS THEN
+    RAISE EXCEPTION 'Failed to insert admin request: %', SQLERRM;
+  END;
+END;
+$$;
+
+-- Grant execute permission to authenticated users
+GRANT EXECUTE ON FUNCTION ensure_admin_request(UUID, TEXT) TO authenticated;
+```
+
+This function:
+1. Creates the admin_requests table if it doesn't exist
+2. Sets up appropriate Row Level Security policies
+3. Inserts the new admin request
+4. Can be called by any authenticated user
+
+## Troubleshooting 500 Errors with Supabase Tables
+
+If you encounter 500 errors when trying to access tables:
+
+1. Check if the table exists in Supabase:
+   - Go to the Supabase Dashboard
+   - Navigate to the Table Editor
+   - Look for the table in the list
+
+2. If the table doesn't exist, you can:
+   - Run the SQL scripts provided in this README
+   - Use the `ensure_admin_request` RPC function which handles this automatically
+
+3. Check RLS (Row Level Security) policies:
+   - Ensure users have appropriate permissions to read/write to the tables
+   - The provided SQL scripts include RLS policies

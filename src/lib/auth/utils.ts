@@ -193,24 +193,7 @@ export async function canRequestAdminStatus(userId: string) {
       return { eligible: false, error: 'User ID is required' };
     }
     
-    // Check if the user exists in auth first
-    try {
-      const { data: authData, error: authError } = await supabase.auth.getUser(userId);
-      
-      if (authError || !authData.user) {
-        console.error('[AdminRequest] User not found in auth system:', authError);
-        return { eligible: false, error: 'Could not verify user in authentication system' };
-      }
-      
-      // Check if email is from sandoog.com domain
-      const email = authData.user.email;
-      if (email && email.toLowerCase().endsWith('@sandoog.com')) {
-        return { eligible: false, error: 'Users with sandoog.com emails are automatically site masters' };
-      }
-    } catch (err) {
-      console.error('[AdminRequest] Error checking auth status:', err);
-      // Continue with other checks, don't return early
-    }
+    let is500Error = false;
     
     // First check if user already has any admin requests
     let existingRequests = [];
@@ -222,7 +205,15 @@ export async function canRequestAdminStatus(userId: string) {
         .eq('user_id', userId)
         .order('requested_at', { ascending: false });
       
-      if (!requestError && requestData) {
+      if (requestError) {
+        if (requestError.code === '500' || requestError.message?.includes('500')) {
+          console.log('[AdminRequest] 500 error detected, table might not exist');
+          is500Error = true;
+          // Continue with other checks if table doesn't exist
+        } else if (!requestError.message?.includes('does not exist')) {
+          console.error('[AdminRequest] Error checking existing requests:', requestError);
+        }
+      } else if (requestData) {
         existingRequests = requestData;
         
         // If any active requests exist, the user is not eligible
@@ -245,35 +236,50 @@ export async function canRequestAdminStatus(userId: string) {
           
           // If rejected, they can apply again, continue with checks
         }
-      } else if (requestError && !requestError.message?.includes('does not exist')) {
-        // Only log and continue if it's not a "table doesn't exist" error
-        console.error('[AdminRequest] Error checking existing requests:', requestError);
       }
     } catch (err) {
       console.warn('[AdminRequest] Error checking admin requests, continuing:', err);
       // Continue with user checks
     }
     
-    // Then check user attributes in the users table
+    // Check user attributes in the users table
     try {
       const { data: userData, error: userError } = await supabase
         .from('users')
-        .select('is_admin, is_site_master, group_id')
+        .select('is_admin, is_site_master, group_id, email')
         .eq('id', userId)
         .single();
       
-      // If user not found in users table but exists in auth, they're eligible
-      if (userError && userError.code === 'PGRST116') {
-        console.log('[AdminRequest] User not found in users table, eligible as new user');
-        return { eligible: true, error: null };
-      }
-      
       if (userError) {
-        console.error('[AdminRequest] Error checking user data:', userError);
-        return { eligible: true, error: null }; // Give benefit of doubt
-      }
-      
-      if (userData) {
+        if (userError.code === '500' || userError.message?.includes('500')) {
+          is500Error = true;
+          console.log('[AdminRequest] 500 error on users table, will use fallback');
+        } else if (userError.code === 'PGRST116') {
+          console.log('[AdminRequest] User not found in users table, eligible as new user');
+          return { eligible: true, error: null };
+        } else {
+          console.error('[AdminRequest] Error checking user data:', userError);
+        }
+        
+        // If we got a 500 error and no conclusive result yet, continue to fallback
+        if (is500Error) {
+          // Last attempt - check directly with auth
+          try {
+            const { data: authData } = await supabase.auth.getUser(userId);
+            if (authData?.user) {
+              console.log('[AdminRequest] User found in auth, assuming eligible');
+              return { eligible: true, error: null };
+            }
+          } catch (authErr) {
+            console.error('[AdminRequest] Error checking auth:', authErr);
+          }
+        }
+      } else if (userData) {
+        // Check if email is from sandoog.com domain
+        if (userData.email && userData.email.toLowerCase().endsWith('@sandoog.com')) {
+          return { eligible: false, error: 'Users with sandoog.com emails are automatically site masters' };
+        }
+        
         // Check specific conditions that would make user ineligible
         if (userData.is_admin) {
           return { eligible: false, error: 'You are already an admin' };
