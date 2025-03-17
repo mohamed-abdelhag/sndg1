@@ -128,26 +128,28 @@
   
   // Direct user data check
   async function getUserDirectly(userId: string) {
+    type UserData = {
+      is_admin: boolean;
+      is_site_master: boolean;
+      group_id: string | null;
+      email: string;
+    };
+    
     try {
-      const { data, error } = await safeQuery<{ 
-        is_admin: boolean; 
-        is_site_master: boolean; 
-        group_id: string | null; 
-        email: string;
-      }>(() => {
-        return supabase
-          .from('users')
-          .select('is_admin, is_site_master, group_id, email')
-          .eq('id', userId)
-          .single();
-      });
+      const result = await supabase
+        .from('users')
+        .select('is_admin, is_site_master, group_id, email')
+        .eq('id', userId)
+        .single();
+      
+      const { data, error } = result;
       
       if (error) {
         debugInfo += '\nError getting user data: ' + (error.message || 'Unknown error');
         return null;
       }
       
-      return data;
+      return data as UserData;
     } catch (e) {
       debugInfo += '\nException getting user data: ' + e;
       return null;
@@ -156,26 +158,28 @@
   
   // Get existing request status
   async function getExistingRequest(userId: string) {
+    type RequestData = {
+      status: string;
+      requested_at: string;
+    };
+    
     try {
-      const { data, error } = await safeQuery<{ 
-        status: string; 
-        requested_at: string;
-      } | null>(() => {
-        return supabase
-          .from('admin_requests')
-          .select('status, requested_at')
-          .eq('user_id', userId)
-          .order('requested_at', { ascending: false })
-          .limit(1)
-          .maybeSingle();
-      });
+      const result = await supabase
+        .from('admin_requests')
+        .select('status, requested_at')
+        .eq('user_id', userId)
+        .order('requested_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      
+      const { data, error } = result;
       
       if (error) {
         debugInfo += '\nError checking existing requests: ' + (error.message || 'Unknown error');
         return null;
       }
       
-      return data;
+      return data as RequestData;
     } catch (e) {
       debugInfo += '\nException checking existing requests: ' + e;
       return null;
@@ -189,15 +193,15 @@
     requested_at: string;
   }) {
     try {
-      const { error } = await safeQuery<any>(() => {
-        return supabase
-          .from('admin_requests')
-          .insert([{ 
-            user_id: localRequest.user_id, 
-            reason: localRequest.reason,
-            requested_at: localRequest.requested_at
-          }]);
-      });
+      const result = await supabase
+        .from('admin_requests')
+        .insert([{ 
+          user_id: localRequest.user_id, 
+          reason: localRequest.reason,
+          requested_at: localRequest.requested_at
+        }]);
+      
+      const { error } = result;
       
       if (!error) {
         // Success! Remove the local storage item
@@ -252,15 +256,15 @@
       
       // Try to insert the request
       const timestamp = new Date().toISOString();
-      const { error } = await safeQuery<any>(() => {
-        return supabase
-          .from('admin_requests')
-          .insert([{ 
-            user_id: userId, 
-            reason,
-            requested_at: timestamp
-          }]);
-      });
+      const result = await supabase
+        .from('admin_requests')
+        .insert([{ 
+          user_id: userId, 
+          reason,
+          requested_at: timestamp
+        }]);
+      
+      const { error } = result;
       
       if (!error) {
         existingRequestStatus = 'pending';

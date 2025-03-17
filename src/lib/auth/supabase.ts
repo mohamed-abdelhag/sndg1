@@ -20,14 +20,14 @@ export const supabase = createClient(
 );
 
 // Helper to safely execute database operations with proper error handling
-export async function safeQuery<T>(operation: () => any) {
+export async function safeQuery<T>(operation: () => any): Promise<{data: T | null; error: any}> {
   try {
     return await operation();
   } catch (error) {
     if (DEBUG_MODE) {
       console.error('[Supabase] Error executing query:', error);
     }
-    return { data: null as unknown as T, error };
+    return { data: null, error };
   }
 }
 

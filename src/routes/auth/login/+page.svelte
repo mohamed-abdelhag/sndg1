@@ -57,14 +57,14 @@
         // Ensure database is updated correctly for sandoog.com email users
         // This is a fallback in case the checkUserStatus didn't update it properly
         try {
-          const userId = data && 'user' in data && data.user ? data.user.id : null;
+          const userId = data && typeof data === 'object' && 'user' in data && data.user ? data.user.id : null;
           if (userId) {
             const { error: updateError } = await fetch('/api/update-site-master', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ userId })
             }).then(res => res.json());
-            
+          
             if (updateError) {
               console.warn("Could not update site master status:", updateError);
               debugInfo += `\nWarning: Could not update site master status: ${updateError}`;
